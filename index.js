@@ -12,18 +12,17 @@ app.post('/api/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, phone } = req.body;
     
-    // Validate required fields
     if (!firstName || !email || !phone) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Create user document
+    // Use db.FieldValue instead of admin.firestore
     const userRef = await db.collection('users').add({
       firstName,
       lastName: lastName || '',
       email,
       phone,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: db.FieldValue.serverTimestamp(), // Fixed this line
       status: 'pending'
     });
 
