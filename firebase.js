@@ -1,7 +1,7 @@
 const admin = require('firebase-admin');
 const serviceAccount = require('./firebase-key.json');
 
-// Initialize Firebase Admin only once
+// Initialize with explicit FieldValue export
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
@@ -9,5 +9,7 @@ if (!admin.apps.length) {
   });
 }
 
-// Export Firestore instance directly
-module.exports = admin.firestore();
+const db = admin.firestore();
+const FieldValue = admin.firestore.FieldValue; // Explicitly import FieldValue
+
+module.exports = { db, FieldValue }; // Export both

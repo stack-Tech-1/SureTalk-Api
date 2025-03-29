@@ -1,13 +1,12 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const db = require('./firebase');
+const { db, FieldValue } = require('./firebase'); // Destructure imports
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Signup Endpoint
 app.post('/api/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, phone } = req.body;
@@ -16,13 +15,12 @@ app.post('/api/signup', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Use db.FieldValue instead of admin.firestore
     const userRef = await db.collection('users').add({
       firstName,
       lastName: lastName || '',
       email,
       phone,
-      createdAt: db.FieldValue.serverTimestamp(), // Fixed this line
+      createdAt: FieldValue.serverTimestamp(), // Use imported FieldValue
       status: 'pending'
     });
 
@@ -33,7 +31,7 @@ app.post('/api/signup', async (req, res) => {
     
   } catch (error) {
     console.error('Firestore error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: error.message }); // Return actual error message
   }
 });
 
