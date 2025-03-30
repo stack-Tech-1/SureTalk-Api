@@ -4,10 +4,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "install": "npm rebuild bcrypt --build-from-source",
     "preinstall": "npm uninstall bcrypt"
   },
   "dependencies": {
-    "bcryptjs": "^2.4.3",  
+    "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
     "crypto-js": "^4.2.0",
     "dotenv": "^16.4.7",
@@ -20,6 +21,6 @@
     "winston": "^3.17.0"
   },
   "engines": {
-    "node": "18.x"  
+    "node": "18.x"
   }
 }
