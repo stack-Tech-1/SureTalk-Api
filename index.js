@@ -14,7 +14,7 @@ const crypto = require('crypto');
 // ==================== Initialize Express ====================
 const app = express();
 
-// ================== Logger Configuration (Winston) ==================
+// ==================== Logger Configuration (Winston) ====================
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
