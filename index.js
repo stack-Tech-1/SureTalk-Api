@@ -15,7 +15,7 @@ app.post('/api/signup', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const userRef = await db.collection('users').add({
+    const userRef = await db.collection('Web-Users').add({
       firstName,
       lastName: lastName || '',
       email,
