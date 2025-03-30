@@ -51,11 +51,23 @@ app.post('/api/signup', async (req, res) => {
       });
     }
 
-    // Create user document
-    const userRef = await db.collection('Web-Users').add({
+    // Normalize email (lowercase, trim)
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Check if user already exists
+    const existingUser = await db.collection('Web-Users').doc(normalizedEmail).get();
+    if (existingUser.exists) {
+      return res.status(409).json({
+        success: false,
+        error: 'User with this email already exists'
+      });
+    }
+
+    // Create user document with email as ID
+    await db.collection('Web-Users').doc(normalizedEmail).set({
       firstName,
       lastName: lastName || '',
-      email,
+      email: normalizedEmail, // Store normalized email
       phone,
       username: username || '',
       password: hashPassword(password),
@@ -69,7 +81,7 @@ app.post('/api/signup', async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'User created successfully',
-      userId: userRef.id,
+      userId: normalizedEmail, // Now returning the email as userId
       timestamp: new Date().toISOString()
     });
     
