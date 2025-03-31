@@ -114,7 +114,7 @@ const sendVerificationEmail = async (email) => {
     used: false
   });
 
-  const verificationLink = `${process.env.BASE_URL}/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
+  const verificationLink = `${process.env.BASE_URL || 'https://suretalk-api.onrender.com'}/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
 
   await transporter.sendMail({
     from: `"SureTalk" <${process.env.EMAIL_USER}>`,
