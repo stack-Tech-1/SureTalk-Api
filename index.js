@@ -281,7 +281,93 @@ app.get('/api/verify-email', async (req, res) => {
     });
     return res.redirect(`${process.env.FRONTEND_URL}/login?error=server_error`);
   }
+
+  // After successful verification:
+  return res.redirect('http://suretalknow.com?verified=true');
 });
+
+
+// ==================== Google Auth Endpoint ====================
+app.post('/api/google-auth', async (req, res) => {
+  try {
+    const { credential } = req.body;
+    const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+    
+    const ticket = await client.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+    
+    const payload = ticket.getPayload();
+    const email = payload.email;
+    
+    // Check if user exists
+    const userDoc = await db.collection('Web-Users').doc(email).get();
+    
+    if (!userDoc.exists) {
+      // Create new user
+      await db.collection('Web-Users').doc(email).set({
+        email,
+        firstName: payload.given_name || '',
+        lastName: payload.family_name || '',
+        emailVerified: true,
+        status: 'active',
+        createdAt: FieldValue.serverTimestamp()
+      });
+    }
+    
+    // Generate JWT token
+    const token = generateAuthToken(email);
+    
+    res.json({ token });
+  } catch (error) {
+    logger.error('Google auth failed', { error });
+    res.status(401).json({ error: 'Authentication failed' });
+  }
+});
+
+// Login Endpoint
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const userDoc = await db.collection('Web-Users').doc(email).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const user = userDoc.data();
+    
+    if (!user.emailVerified) {
+      return res.status(403).json({ error: 'Email not verified' });
+    }
+    
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    const token = generateAuthToken(email);
+    res.json({ token });
+  } catch (error) {
+    logger.error('Login failed', { error });
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+function generateAuthToken(email) {
+  return jwt.sign(
+    { email },
+    process.env.JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+}
+
+
+
+
+
+
 
 // ==================== Server Startup ====================
 const PORT = process.env.PORT || 3000;
