@@ -204,36 +204,34 @@ app.post('/api/signup', limiter, async (req, res) => {
 });
 
 // ==================== Email Verification Route ====================
-app.get('/api/verify-email', async (req, res) => {
+app.get('/verify-email', async (req, res) => {
   try {
     const { token, email } = req.query;
-
+    
+    // 1. Find token in Firestore
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
+    
     if (!tokenDoc.exists || tokenDoc.data().used || new Date() > tokenDoc.data().expiresAt) {
       logger.warn('Invalid verification attempt', { email, token });
-      return res.status(400).json({ error: 'Invalid or expired token' });
+      return res.redirect(`${process.env.FRONTEND_URL}/login?error=invalid_token`);
     }
 
-    // Mark token as used
+    // 2. Mark token as used
     await db.collection('verification-tokens').doc(token).update({ used: true });
 
-    // Update user verification status
+    // 3. Update user status
     await db.collection('Web-Users').doc(email).update({
       emailVerified: true,
-      verified: true,
       status: 'active',
       updatedAt: FieldValue.serverTimestamp()
     });
 
     logger.info('Email verified successfully', { email });
-    res.status(200).json({ success: true, message: 'Email verified successfully' });
-
+    return res.redirect(`${process.env.FRONTEND_URL}/login?verified=true`);
+    
   } catch (error) {
-    logger.error('Email verification failed', { 
-      error: error.message,
-      query: req.query 
-    });
-    res.status(500).json({ error: 'Verification failed' });
+    logger.error('Verification failed', { error: error.message });
+    return res.redirect(`${process.env.FRONTEND_URL}/login?error=verification_failed`);
   }
 });
 
