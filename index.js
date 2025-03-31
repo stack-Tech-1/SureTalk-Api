@@ -30,23 +30,15 @@ const logger = winston.createLogger({
 
 // ==================== Security Middlewares ====================
 app.use(helmet());
-
 app.set('trust proxy', 1); // Trust first proxy (Render's load balancer)
 
-// The modification of existing limiter configuration:
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // Increased from 5 to 100 requests per window
   message: 'Too many signup attempts from this IP',
-  standardHeaders: true, // Return rate limit info in headers
-  legacyHeaders: false // Disable deprecated headers
+  standardHeaders: true,
+  legacyHeaders: false
 });
-
-// Apply to all routes or specific ones
-app.use(limiter); // Global application
-// OR keep it specific to signup: app.use('/api/signup', limiter);
-
-
 
 // ==================== CORS Configuration ====================
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
@@ -78,8 +70,8 @@ const transporter = nodemailer.createTransport({
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASSWORD
   },
-  logger: true, 
-  debug: true // <--  for troubleshooting
+  logger: true,
+  debug: true
 });
 
 // ==================== Helper Functions ====================
@@ -106,15 +98,25 @@ const isDomainValid = async (email) => {
 
 const sendVerificationEmail = async (email) => {
   const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
+  
+  // Firestore's server timestamp for expiry
+  const expiresAt = new Date();
+  expiresAt.setHours(expiresAt.getHours() + 24); // 24 hours from now
 
   // DEBUG: Log token before saving
-  logger.debug('Generated token', { token, email, expiresAt });
+  logger.debug('Generated token', { 
+    token, 
+    email, 
+    expiresAt,
+    serverTime: new Date(),
+    firestoreServerTime: FieldValue.serverTimestamp()
+  });
 
   await db.collection('verification-tokens').doc(token).set({
     email,
     expiresAt,
-    used: false
+    used: false,
+    createdAt: FieldValue.serverTimestamp() // Firestore's authoritative time
   });
 
   // DEBUG: Verify token exists after saving
@@ -124,7 +126,6 @@ const sendVerificationEmail = async (email) => {
   }
 
   const verificationLink = `${process.env.BASE_URL}/api/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
-
 
   await transporter.sendMail({
     from: `"SureTalk" <${process.env.EMAIL_USER}>`,
@@ -219,7 +220,11 @@ app.get('/api/verify-email', async (req, res) => {
   
   try {
     // DEBUG: Log incoming verification attempt
-    logger.debug('Verification attempt', { token, email });
+    logger.debug('Verification attempt', { 
+      token, 
+      email,
+      serverTime: new Date()
+    });
 
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
     
@@ -229,13 +234,27 @@ app.get('/api/verify-email', async (req, res) => {
     }
 
     const tokenData = tokenDoc.data();
+    
+    // Handle both Firestore Timestamp and Date objects
+    let expiresAt = tokenData.expiresAt;
+    if (expiresAt.toDate) { // If it's a Firestore Timestamp
+      expiresAt = expiresAt.toDate();
+    } else if (typeof expiresAt === 'string') { // If stored as string
+      expiresAt = new Date(expiresAt);
+    }
+
     if (tokenData.used) {
       logger.warn('Token already used', { token });
       return res.redirect(`${process.env.FRONTEND_URL}/login?error=used_token`);
     }
 
-    if (new Date() > tokenData.expiresAt) {
-      logger.warn('Expired token', { token, expiresAt: tokenData.expiresAt });
+    if (new Date() > expiresAt) {
+      logger.warn('Expired token', { 
+        token, 
+        expiresAt,
+        currentTime: new Date(),
+        timeDifference: new Date() - expiresAt
+      });
       return res.redirect(`${process.env.FRONTEND_URL}/login?error=expired_token`);
     }
 
@@ -248,14 +267,18 @@ app.get('/api/verify-email', async (req, res) => {
     await db.collection('verification-tokens').doc(token).update({ used: true });
     await db.collection('Web-Users').doc(email).update({
       emailVerified: true,
-      status: 'active'
+      status: 'active',
+      updatedAt: FieldValue.serverTimestamp()
     });
 
     logger.info('Email verified successfully', { email });
     return res.redirect(`${process.env.FRONTEND_URL}/login?verified=true`);
 
   } catch (error) {
-    logger.error('Verification failed', { error: error.message });
+    logger.error('Verification failed', { 
+      error: error.message,
+      stack: error.stack
+    });
     return res.redirect(`${process.env.FRONTEND_URL}/login?error=server_error`);
   }
 });
@@ -265,6 +288,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   logger.info(`Server started on port ${PORT}`, {
     environment: process.env.NODE_ENV || 'development',
-    allowedOrigins
+    allowedOrigins,
+    serverTime: new Date()
   });
 });
