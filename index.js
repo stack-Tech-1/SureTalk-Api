@@ -106,13 +106,22 @@ const isDomainValid = async (email) => {
 
 const sendVerificationEmail = async (email) => {
   const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
+
+  // DEBUG: Log token before saving
+  logger.debug('Generated token', { token, email, expiresAt });
 
   await db.collection('verification-tokens').doc(token).set({
     email,
     expiresAt,
     used: false
   });
+
+  // DEBUG: Verify token exists after saving
+  const doc = await db.collection('verification-tokens').doc(token).get();
+  if (!doc.exists) {
+    throw new Error('Token not saved in Firestore');
+  }
 
   const verificationLink = `${process.env.BASE_URL}/api/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
 
@@ -206,29 +215,48 @@ app.post('/api/signup', limiter, async (req, res) => {
 
 // ==================== Email Verification Route ====================
 app.get('/api/verify-email', async (req, res) => {
+  const { token, email } = req.query;
+  
   try {
-    const { token, email } = req.query;
+    // DEBUG: Log incoming verification attempt
+    logger.debug('Verification attempt', { token, email });
 
-    // 1. Validate token
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
-    if (!tokenDoc.exists || tokenDoc.data().used || new Date() > tokenDoc.data().expiresAt) {
-      logger.warn('Invalid token', { email });
+    
+    if (!tokenDoc.exists) {
+      logger.error('Token not found in Firestore', { token });
       return res.redirect(`${process.env.FRONTEND_URL}/login?error=invalid_token`);
     }
 
-    // 2. Update database
+    const tokenData = tokenDoc.data();
+    if (tokenData.used) {
+      logger.warn('Token already used', { token });
+      return res.redirect(`${process.env.FRONTEND_URL}/login?error=used_token`);
+    }
+
+    if (new Date() > tokenData.expiresAt) {
+      logger.warn('Expired token', { token, expiresAt: tokenData.expiresAt });
+      return res.redirect(`${process.env.FRONTEND_URL}/login?error=expired_token`);
+    }
+
+    if (tokenData.email !== email) {
+      logger.warn('Email mismatch', { tokenEmail: tokenData.email, requestEmail: email });
+      return res.redirect(`${process.env.FRONTEND_URL}/login?error=email_mismatch`);
+    }
+
+    // Update database
     await db.collection('verification-tokens').doc(token).update({ used: true });
     await db.collection('Web-Users').doc(email).update({
       emailVerified: true,
       status: 'active'
     });
 
-    logger.info('Email verified', { email });
+    logger.info('Email verified successfully', { email });
     return res.redirect(`${process.env.FRONTEND_URL}/login?verified=true`);
 
   } catch (error) {
     logger.error('Verification failed', { error: error.message });
-    return res.redirect(`${process.env.FRONTEND_URL}/login?error=verification_failed`);
+    return res.redirect(`${process.env.FRONTEND_URL}/login?error=server_error`);
   }
 });
 
