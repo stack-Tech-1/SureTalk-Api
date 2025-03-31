@@ -219,48 +219,30 @@ app.get('/api/verify-email', async (req, res) => {
   const { token, email } = req.query;
   
   try {
-    // DEBUG: Log incoming verification attempt
-    logger.debug('Verification attempt', { 
-      token, 
-      email,
-      serverTime: new Date()
-    });
+    logger.debug('Verification attempt', { token, email });
 
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
     
     if (!tokenDoc.exists) {
-      logger.error('Token not found in Firestore', { token });
-      return res.redirect(`${process.env.FRONTEND_URL}/login?error=invalid_token`);
+      return res.redirect('http://suretalknow.com?error=invalid_token');
     }
 
     const tokenData = tokenDoc.data();
-    
-    // Handle both Firestore Timestamp and Date objects
     let expiresAt = tokenData.expiresAt;
-    if (expiresAt.toDate) { // If it's a Firestore Timestamp
-      expiresAt = expiresAt.toDate();
-    } else if (typeof expiresAt === 'string') { // If stored as string
-      expiresAt = new Date(expiresAt);
-    }
+    
+    if (expiresAt.toDate) expiresAt = expiresAt.toDate();
+    if (typeof expiresAt === 'string') expiresAt = new Date(expiresAt);
 
     if (tokenData.used) {
-      logger.warn('Token already used', { token });
-      return res.redirect(`${process.env.FRONTEND_URL}/login?error=used_token`);
+      return res.redirect('http://suretalknow.com?error=used_token');
     }
 
     if (new Date() > expiresAt) {
-      logger.warn('Expired token', { 
-        token, 
-        expiresAt,
-        currentTime: new Date(),
-        timeDifference: new Date() - expiresAt
-      });
-      return res.redirect(`${process.env.FRONTEND_URL}/login?error=expired_token`);
+      return res.redirect('http://suretalknow.com?error=expired_token');
     }
 
     if (tokenData.email !== email) {
-      logger.warn('Email mismatch', { tokenEmail: tokenData.email, requestEmail: email });
-      return res.redirect(`${process.env.FRONTEND_URL}/login?error=email_mismatch`);
+      return res.redirect('http://suretalknow.com?error=email_mismatch');
     }
 
     // Update database
@@ -272,18 +254,12 @@ app.get('/api/verify-email', async (req, res) => {
     });
 
     logger.info('Email verified successfully', { email });
-    return res.redirect(`${process.env.FRONTEND_URL}/login?verified=true`);
+    return res.redirect('http://suretalknow.com?verified=true');
 
   } catch (error) {
-    logger.error('Verification failed', { 
-      error: error.message,
-      stack: error.stack
-    });
-    return res.redirect(`${process.env.FRONTEND_URL}/login?error=server_error`);
+    logger.error('Verification failed', { error });
+    return res.redirect('http://suretalknow.com?error=verification_failed');
   }
-
-  // After successful verification:
-  return res.redirect('http://suretalknow.com?verified=true');
 });
 
 
