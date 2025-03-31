@@ -114,7 +114,8 @@ const sendVerificationEmail = async (email) => {
     used: false
   });
 
-  const verificationLink = `${process.env.BASE_URL || 'https://suretalk-api.onrender.com'}/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
+  const verificationLink = `${process.env.BASE_URL}/api/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
+
 
   await transporter.sendMail({
     from: `"SureTalk" <${process.env.EMAIL_USER}>`,
@@ -204,31 +205,27 @@ app.post('/api/signup', limiter, async (req, res) => {
 });
 
 // ==================== Email Verification Route ====================
-app.get('/verify-email', async (req, res) => {
+app.get('/api/verify-email', async (req, res) => {
   try {
     const { token, email } = req.query;
-    
-    // 1. Find token in Firestore
+
+    // 1. Validate token
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
-    
     if (!tokenDoc.exists || tokenDoc.data().used || new Date() > tokenDoc.data().expiresAt) {
-      logger.warn('Invalid verification attempt', { email, token });
+      logger.warn('Invalid token', { email });
       return res.redirect(`${process.env.FRONTEND_URL}/login?error=invalid_token`);
     }
 
-    // 2. Mark token as used
+    // 2. Update database
     await db.collection('verification-tokens').doc(token).update({ used: true });
-
-    // 3. Update user status
     await db.collection('Web-Users').doc(email).update({
       emailVerified: true,
-      status: 'active',
-      updatedAt: FieldValue.serverTimestamp()
+      status: 'active'
     });
 
-    logger.info('Email verified successfully', { email });
+    logger.info('Email verified', { email });
     return res.redirect(`${process.env.FRONTEND_URL}/login?verified=true`);
-    
+
   } catch (error) {
     logger.error('Verification failed', { error: error.message });
     return res.redirect(`${process.env.FRONTEND_URL}/login?error=verification_failed`);
