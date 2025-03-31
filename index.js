@@ -30,11 +30,23 @@ const logger = winston.createLogger({
 
 // ==================== Security Middlewares ====================
 app.use(helmet());
+
+app.set('trust proxy', 1); // Trust first proxy (Render's load balancer)
+
+// The modification of existing limiter configuration:
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: 'Too many signup attempts from this IP'
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Increased from 5 to 100 requests per window
+  message: 'Too many signup attempts from this IP',
+  standardHeaders: true, // Return rate limit info in headers
+  legacyHeaders: false // Disable deprecated headers
 });
+
+// Apply to all routes or specific ones
+app.use(limiter); // Global application
+// OR keep it specific to signup: app.use('/api/signup', limiter);
+
+
 
 // ==================== CORS Configuration ====================
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
@@ -65,7 +77,9 @@ const transporter = nodemailer.createTransport({
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASSWORD
-  }
+  },
+  logger: true, 
+  debug: true // <--  for troubleshooting
 });
 
 // ==================== Helper Functions ====================
