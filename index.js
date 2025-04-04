@@ -172,14 +172,14 @@ app.post('/api/signup', limiter, async (req, res) => {
     }
 
     // Check existing user
-    const existingUser = await db.collection('Web-Users').doc(normalizedEmail).get();
+    const existingUser = await db.collection('users').doc(normalizedEmail).get();
     if (existingUser.exists) {
       logger.warn('Duplicate registration attempt', { email: normalizedEmail });
       return res.status(409).json({ error: 'Email already registered' });
     }
 
     // Create user
-    await db.collection('Web-Users').doc(normalizedEmail).set({
+    await db.collection('users').doc(normalizedEmail).set({
       firstName: sanitizeHtml(firstName),
       email: normalizedEmail,
       phone: sanitizeHtml(phone),
@@ -248,7 +248,7 @@ app.get('/api/verify-email', async (req, res) => {
 
     // Update database
     await db.collection('verification-tokens').doc(token).update({ used: true });
-    await db.collection('Web-Users').doc(email).update({
+    await db.collection('users').doc(email).update({
       emailVerified: true,
       status: 'active',
       updatedAt: FieldValue.serverTimestamp()
@@ -279,11 +279,11 @@ app.post('/api/google-auth', async (req, res) => {
     const email = payload.email;
     
     // Check if user exists
-    const userDoc = await db.collection('Web-Users').doc(email).get();
+    const userDoc = await db.collection('users').doc(email).get();
     
     if (!userDoc.exists) {
       // Create new user
-      await db.collection('Web-Users').doc(email).set({
+      await db.collection('users').doc(email).set({
         email,
         firstName: payload.given_name || '',
         lastName: payload.family_name || '',
@@ -307,7 +307,7 @@ app.post('/api/google-auth', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const userDoc = await db.collection('Web-Users').doc(email).get();
+    const userDoc = await db.collection('users').doc(email).get();
     
     if (!userDoc.exists) {
       return res.status(404).json({ error: 'User not found' });
