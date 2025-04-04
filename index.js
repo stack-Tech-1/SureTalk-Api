@@ -142,14 +142,14 @@ const sendVerificationEmail = async (email) => {
 // ==================== Routes ====================
 app.post('/api/signup', limiter, async (req, res) => {
   try {
-    const { firstName, email, phone, password, ...rest } = req.body;
+    const { firstName, email, phone, userPin, ...rest } = req.body;
 
     // Validation
-    if (!firstName || !email || !phone || !password) {
+    if (!firstName || !email || !phone || !userPin) {
       logger.warn('Missing fields', { email });
       return res.status(400).json({ 
         error: 'Missing required fields',
-        details: { requires: ['firstName', 'email', 'phone', 'password'] }
+        details: { requires: ['firstName', 'email', 'phone', 'userPin'] }
       });
     }
 
@@ -268,7 +268,7 @@ app.post('/api/google-auth', async (req, res) => {
   try {
     const { credential } = req.body;
     const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-    
+
     const ticket = await client.verifyIdToken({
       idToken: credential,
       audience: process.env.GOOGLE_CLIENT_ID
