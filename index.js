@@ -11,6 +11,7 @@ const nodemailer = require('nodemailer');
 const winston = require('winston');
 const crypto = require('crypto');
 
+
 // ==================== Initialize Express ====================
 const app = express();
 
@@ -182,7 +183,7 @@ app.post('/api/signup', limiter, async (req, res) => {
       firstName: sanitizeHtml(firstName),
       email: normalizedEmail,
       phone: sanitizeHtml(phone),
-      password: await bcrypt.hash(password, parseInt(process.env.BCRYPT_SALT_ROUNDS || 12)),
+      userPin: await bcrypt.hash(userPin, parseInt(process.env.BCRYPT_SALT_ROUNDS || 12)),
       ...rest,
       isInterestedInPartnership: Boolean(rest.joinProgram),
       createdAt: FieldValue.serverTimestamp(),
