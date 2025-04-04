@@ -234,15 +234,15 @@ app.get('/api/verify-email', async (req, res) => {
     if (typeof expiresAt === 'string') expiresAt = new Date(expiresAt);
 
     if (tokenData.used) {
-      return res.redirect('http://suretalknow.com?error=used_token');
+      return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=used_token');
     }
 
     if (new Date() > expiresAt) {
-      return res.redirect('http://suretalknow.com?error=expired_token');
+      return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=expired_token');
     }
 
     if (tokenData.email !== email) {
-      return res.redirect('http://suretalknow.com?error=email_mismatch');
+      return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=email_mismatch');
     }
 
     // Update database
@@ -254,11 +254,11 @@ app.get('/api/verify-email', async (req, res) => {
     });
 
     logger.info('Email verified successfully', { email });
-    return res.redirect('http://suretalknow.com?verified=true');
+    return res.redirect('https://buy.stripe.com/bIY1806DG7qw6uk144?verified=true');
 
   } catch (error) {
     logger.error('Verification failed', { error });
-    return res.redirect('http://suretalknow.com?error=verification_failed');
+    return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=verification_failed');
   }
 });
 
