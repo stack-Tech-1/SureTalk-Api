@@ -12,7 +12,7 @@ const winston = require('winston');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
-const recoveryconst recoveryLink = `${process.env.FRONTEND_URL}/recover-account?token=${recoveryToken}`;
+
 
 // ==================== Initialize Express ====================
 const app = express();
