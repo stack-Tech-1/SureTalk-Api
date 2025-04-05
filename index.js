@@ -10,7 +10,8 @@ const sanitizeHtml = require('sanitize-html');
 const nodemailer = require('nodemailer');
 const winston = require('winston');
 const crypto = require('crypto');
-
+const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 
 // ==================== Initialize Express ====================
 const app = express();
@@ -97,17 +98,20 @@ const isDomainValid = async (email) => {
   }
 };
 
-const sendVerificationEmail = async (email) => {
+const generateUserId = () => {
+  return crypto.randomBytes(16).toString('hex');
+};
+
+const sendVerificationEmail = async (email, userId) => {
   const token = crypto.randomBytes(32).toString('hex');
   
-  // Firestore's server timestamp for expiry
   const expiresAt = new Date();
   expiresAt.setHours(expiresAt.getHours() + 24); // 24 hours from now
 
-  // DEBUG: Log token before saving
   logger.debug('Generated token', { 
     token, 
     email, 
+    userId,
     expiresAt,
     serverTime: new Date(),
     firestoreServerTime: FieldValue.serverTimestamp()
@@ -115,18 +119,18 @@ const sendVerificationEmail = async (email) => {
 
   await db.collection('verification-tokens').doc(token).set({
     email,
+    userId,
     expiresAt,
     used: false,
-    createdAt: FieldValue.serverTimestamp() // Firestore's authoritative time
+    createdAt: FieldValue.serverTimestamp()
   });
 
-  // DEBUG: Verify token exists after saving
   const doc = await db.collection('verification-tokens').doc(token).get();
   if (!doc.exists) {
     throw new Error('Token not saved in Firestore');
   }
 
-  const verificationLink = `${process.env.BASE_URL}/api/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
+  const verificationLink = `${process.env.BASE_URL}/api/verify-email?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
 
   await transporter.sendMail({
     from: `"SureTalk" <${process.env.EMAIL_USER}>`,
@@ -140,10 +144,18 @@ const sendVerificationEmail = async (email) => {
   });
 };
 
+function generateAuthToken(userId) {
+  return jwt.sign(
+    { userId },
+    process.env.JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+}
+
 // ==================== Routes ====================
 app.post('/api/signup', limiter, async (req, res) => {
   try {
-    const { firstName, email, phone, userPin, ...rest } = req.body;
+    let { firstName, email, phone, userPin, userId, ...rest } = req.body;
 
     // Validation
     if (!firstName || !email || !phone || !userPin) {
@@ -171,15 +183,27 @@ app.post('/api/signup', limiter, async (req, res) => {
       return res.status(400).json({ error: 'Email domain does not exist' });
     }
 
-    // Check existing user
-    const existingUser = await db.collection('users').doc(normalizedEmail).get();
-    if (existingUser.exists) {
-      logger.warn('Duplicate registration attempt', { email: normalizedEmail });
+    // Generate userId if not provided
+    userId = userId || generateUserId();
+
+    // Check for existing email or userId
+    const usersRef = db.collection('users');
+    const emailQuery = await usersRef.where('email', '==', normalizedEmail).limit(1).get();
+    const userIdQuery = await usersRef.where('userId', '==', userId).limit(1).get();
+
+    if (!emailQuery.empty) {
+      logger.warn('Duplicate email attempt', { email: normalizedEmail });
       return res.status(409).json({ error: 'Email already registered' });
     }
 
-    // Create user
-    await db.collection('users').doc(normalizedEmail).set({
+    if (!userIdQuery.empty) {
+      logger.warn('Duplicate userId attempt', { userId });
+      return res.status(409).json({ error: 'User ID already exists' });
+    }
+
+    // Create user with userId as document ID
+    await usersRef.doc(userId).set({
+      userId,
       firstName: sanitizeHtml(firstName),
       email: normalizedEmail,
       phone: sanitizeHtml(phone),
@@ -194,13 +218,13 @@ app.post('/api/signup', limiter, async (req, res) => {
     });
 
     // Send verification email
-    await sendVerificationEmail(normalizedEmail);
-    logger.info('User created and verification email sent', { email: normalizedEmail });
+    await sendVerificationEmail(normalizedEmail, userId);
+    logger.info('User created and verification email sent', { userId, email: normalizedEmail });
 
     res.status(201).json({
       success: true,
       message: 'User created. Verification email sent.',
-      userId: normalizedEmail
+      userId
     });
 
   } catch (error) {
@@ -217,10 +241,10 @@ app.post('/api/signup', limiter, async (req, res) => {
 
 // ==================== Email Verification Route ====================
 app.get('/api/verify-email', async (req, res) => {
-  const { token, email } = req.query;
+  const { token, email, userId } = req.query;
   
   try {
-    logger.debug('Verification attempt', { token, email });
+    logger.debug('Verification attempt', { token, email, userId });
 
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
     
@@ -242,19 +266,21 @@ app.get('/api/verify-email', async (req, res) => {
       return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=expired_token');
     }
 
-    if (tokenData.email !== email) {
+    if (tokenData.email !== email || tokenData.userId !== userId) {
       return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=email_mismatch');
     }
 
     // Update database
     await db.collection('verification-tokens').doc(token).update({ used: true });
-    await db.collection('users').doc(email).update({
+    
+    // Update user document using userId
+    await db.collection('users').doc(userId).update({
       emailVerified: true,
       status: 'active',
       updatedAt: FieldValue.serverTimestamp()
     });
 
-    logger.info('Email verified successfully', { email });
+    logger.info('Email verified successfully', { userId, email });
     return res.redirect('https://buy.stripe.com/bIY1806DG7qw6uk144?verified=true');
 
   } catch (error) {
@@ -262,7 +288,6 @@ app.get('/api/verify-email', async (req, res) => {
     return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=verification_failed');
   }
 });
-
 
 // ==================== Google Auth Endpoint ====================
 app.post('/api/google-auth', async (req, res) => {
@@ -277,13 +302,16 @@ app.post('/api/google-auth', async (req, res) => {
     
     const payload = ticket.getPayload();
     const email = payload.email;
+    const userId = generateUserId();
     
-    // Check if user exists
-    const userDoc = await db.collection('users').doc(email).get();
+    // Check if user exists by email
+    const usersRef = db.collection('users');
+    const querySnapshot = await usersRef.where('email', '==', email).limit(1).get();
     
-    if (!userDoc.exists) {
-      // Create new user
-      await db.collection('users').doc(email).set({
+    if (querySnapshot.empty) {
+      // Create new user with userId as document ID
+      await usersRef.doc(userId).set({
+        userId,
         email,
         firstName: payload.given_name || '',
         lastName: payload.family_name || '',
@@ -293,8 +321,8 @@ app.post('/api/google-auth', async (req, res) => {
       });
     }
     
-    // Generate JWT token
-    const token = generateAuthToken(email);
+    // Generate JWT token with userId
+    const token = generateAuthToken(querySnapshot.empty ? userId : querySnapshot.docs[0].id);
     
     res.json({ token });
   } catch (error) {
@@ -307,44 +335,42 @@ app.post('/api/google-auth', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const userDoc = await db.collection('users').doc(email).get();
     
-    if (!userDoc.exists) {
+    // Find user by email
+    const querySnapshot = await db.collection('users')
+      .where('email', '==', email)
+      .limit(1)
+      .get();
+
+    if (querySnapshot.empty) {
       return res.status(404).json({ error: 'User not found' });
     }
     
+    const userDoc = querySnapshot.docs[0];
     const user = userDoc.data();
     
     if (!user.emailVerified) {
       return res.status(403).json({ error: 'Email not verified' });
     }
     
-    const validPassword = await bcrypt.compare(password, user.password);
+    const validPassword = await bcrypt.compare(password, user.userPin);
     if (!validPassword) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    const token = generateAuthToken(email);
-    res.json({ token });
+    // Generate token with userId
+    const token = generateAuthToken(user.userId);
+    res.json({ 
+      token,
+      userId: user.userId,
+      firstName: user.firstName,
+      email: user.email
+    });
   } catch (error) {
     logger.error('Login failed', { error });
     res.status(500).json({ error: 'Login failed' });
   }
 });
-
-function generateAuthToken(email) {
-  return jwt.sign(
-    { email },
-    process.env.JWT_SECRET,
-    { expiresIn: '7d' }
-  );
-}
-
-
-
-
-
-
 
 // ==================== Server Startup ====================
 const PORT = process.env.PORT || 3000;
