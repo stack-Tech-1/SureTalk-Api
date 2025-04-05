@@ -12,6 +12,7 @@ const winston = require('winston');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
+const recoveryconst recoveryLink = `${process.env.FRONTEND_URL}/recover-account?token=${recoveryToken}`;
 
 // ==================== Initialize Express ====================
 const app = express();
@@ -130,7 +131,7 @@ const sendVerificationEmail = async (email, userId) => {
     throw new Error('Token not saved in Firestore');
   }
 
-  const verificationLink = `${process.env.BASE_URL}/api/verify-email?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
+    const verificationLink = `${process.env.FRONTEND_URL}/recover-account?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
 
   await transporter.sendMail({
     from: `"SureTalk" <${process.env.EMAIL_USER}>`,
@@ -418,7 +419,7 @@ app.post('/api/request-recovery', limiter, async (req, res) => {
     });
 
     // Send recovery email
-    const recoveryLink = `${process.env.BASE_URL}/recover-account?token=${recoveryToken}`;
+    const recoveryLink = `${process.env.FRONTEND_URL}/recover-account?token=${recoveryToken}`;
     
     await transporter.sendMail({
       from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
