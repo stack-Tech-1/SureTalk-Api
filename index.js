@@ -372,6 +372,146 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+
+
+
+
+
+// ==================== Recovery Endpoints ====================
+
+// Request recovery
+app.post('/api/request-recovery', limiter, async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const normalizedEmail = sanitizeHtml(email).toLowerCase().trim();
+
+    // Check if user exists
+    const querySnapshot = await db.collection('users')
+      .where('email', '==', normalizedEmail)
+      .limit(1)
+      .get();
+
+    if (querySnapshot.empty) {
+      return res.status(404).json({ error: 'No account found with this email' });
+    }
+
+    const userDoc = querySnapshot.docs[0];
+    const user = userDoc.data();
+
+    // Generate recovery token
+    const recoveryToken = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 1); // 1 hour expiration
+
+    // Save recovery token
+    await db.collection('recovery-tokens').doc(recoveryToken).set({
+      email: normalizedEmail,
+      userId: user.userId,
+      expiresAt,
+      used: false,
+      createdAt: FieldValue.serverTimestamp()
+    });
+
+    // Send recovery email
+    const recoveryLink = `${process.env.BASE_URL}/recover-account?token=${recoveryToken}`;
+    
+    await transporter.sendMail({
+      from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
+      to: normalizedEmail,
+      subject: 'Account Recovery Request',
+      html: `
+        <p>We received a request to recover your account information.</p>
+        <p>Click the link below to view your User ID and PIN (valid for 1 hour):</p>
+        <a href="${recoveryLink}">Recover Account</a>
+        <p>If you didn't request this, please ignore this email.</p>
+      `
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Recovery email sent. Please check your inbox.' 
+    });
+
+  } catch (error) {
+    logger.error('Recovery request failed', { error });
+    res.status(500).json({ error: 'Account recovery failed' });
+  }
+});
+
+// Verify recovery token and send credentials
+app.post('/api/complete-recovery', limiter, async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Recovery token is required' });
+    }
+
+    // Get token document
+    const tokenDoc = await db.collection('recovery-tokens').doc(token).get();
+    
+    if (!tokenDoc.exists) {
+      return res.status(404).json({ error: 'Invalid or expired recovery link' });
+    }
+
+    const tokenData = tokenDoc.data();
+    
+    // Check if token is used or expired
+    if (tokenData.used) {
+      return res.status(400).json({ error: 'This recovery link has already been used' });
+    }
+
+    let expiresAt = tokenData.expiresAt;
+    if (expiresAt.toDate) expiresAt = expiresAt.toDate();
+    if (new Date() > expiresAt) {
+      return res.status(400).json({ error: 'This recovery link has expired' });
+    }
+
+    // Get user data
+    const userDoc = await db.collection('users').doc(tokenData.userId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userDoc.data();
+
+    // Mark token as used
+    await db.collection('recovery-tokens').doc(token).update({ used: true });
+
+    // Send credentials email
+    await transporter.sendMail({
+      from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
+      to: tokenData.email,
+      subject: 'Your Account Information',
+      html: `
+        <p>Here are your account details:</p>
+        <p><strong>User ID:</strong> ${user.userId}</p>
+        <p><strong>User PIN:</strong> ${user.userPin}</p>
+        <p>For security reasons, we recommend changing your PIN after logging in.</p>
+        <p>If you didn't request this information, please contact our support team immediately.</p>
+      `,
+      // For better security, you might want to send the PIN separately or use a temporary PIN
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Account information has been sent to your email' 
+    });
+
+  } catch (error) {
+    logger.error('Recovery completion failed', { error });
+    res.status(500).json({ error: 'Failed to complete account recovery' });
+  }
+});
+
+
+
+
 // ==================== Server Startup ====================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
