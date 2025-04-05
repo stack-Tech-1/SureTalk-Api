@@ -446,10 +446,14 @@ app.post('/api/request-recovery', limiter, async (req, res) => {
 
 // Verify recovery token and send credentials
 app.post('/api/complete-recovery', limiter, async (req, res) => {
+  
   try {
+    console.log("Recovery request body:", req.body); // Log incoming request
+              
     const { token } = req.body;
 
     if (!token) {
+      console.log("Missing token in request");
       return res.status(400).json({ error: 'Recovery token is required' });
     }
 
@@ -481,27 +485,40 @@ app.post('/api/complete-recovery', limiter, async (req, res) => {
 
     const user = userDoc.data();
 
-    // Mark token as used
-    await db.collection('recovery-tokens').doc(token).update({ used: true });
+    // Generate 4-digit temporary PIN
+    const tempPin = Math.floor(1000 + Math.random() * 9000).toString();
+    const tempPinExpiry = new Date();
+    tempPinExpiry.setHours(tempPinExpiry.getHours() + 1); // Expires in 1 hour
 
-    // Send credentials email
+    // Mark token as used and update user with temp PIN
+    await db.collection('recovery-tokens').doc(token).update({ used: true });
+    await db.collection('users').doc(tokenData.userId).update({
+      tempPin: await bcrypt.hash(tempPin, 12),
+      tempPinExpiry,
+      requiresPinReset: true
+    });
+
+    console.log("Final Email HTML:", `
+      <p>Temporary PIN: ${tempPin}</p>
+    `);
+
+    // Send email with **User ID + Temporary PIN**
     await transporter.sendMail({
       from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
       to: tokenData.email,
-      subject: 'Your Account Information',
+      subject: 'Your Temporary Access Details',
       html: `
-        <p>Here are your account details:</p>
-        <p><strong>User ID:</strong> ${user.userId}</p>
-        <p><strong>User PIN:</strong> ${user.userPin}</p>
-        <p>For security reasons, we recommend changing your PIN after logging in.</p>
-        <p>If you didn't request this information, please contact our support team immediately.</p>
-      `,
-      // For better security, you might want to send the PIN separately or use a temporary PIN
+        <p>Here are your temporary access details:</p>
+        <p><strong>User ID:</strong> ${user.userId}</p>  
+        <p><strong>Temporary PIN:</strong> ${tempPin}</p>
+        <p>This PIN will expire in 1 hour. You will be required to set a new PIN after login.</p>
+        <p>If you didn't request this, please contact our support team immediately.</p>
+      `
     });
 
     res.json({ 
       success: true, 
-      message: 'Account information has been sent to your email' 
+      message: 'Temporary access details have been sent to your email' 
     });
 
   } catch (error) {
