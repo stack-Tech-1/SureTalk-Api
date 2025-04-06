@@ -272,6 +272,7 @@ app.get('/api/verify-email', async (req, res) => {
     // After successful verification, send this enhanced HTML response:
     res.setHeader('Content-Type', 'text/html');
     res.setHeader('Cache-Control', 'no-store');
+    res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:;");
     res.send(`
       <!DOCTYPE html>
       <html>
