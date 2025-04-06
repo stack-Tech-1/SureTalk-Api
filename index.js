@@ -16,7 +16,7 @@ const { OAuth2Client } = require('google-auth-library');
 // ==================== Initialize Express ====================
 const app = express();
 
-// ==================== Logger Configuration (Winston) ====================
+// ==================== Logger Configuration ====================
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -32,12 +32,12 @@ const logger = winston.createLogger({
 
 // ==================== Security Middlewares ====================
 app.use(helmet());
-app.set('trust proxy', 1); // Trust first proxy (Render's load balancer)
+app.set('trust proxy', 1);
 
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Increased from 5 to 100 requests per window
-  message: 'Too many signup attempts from this IP',
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many requests from this IP',
   standardHeaders: true,
   legacyHeaders: false
 });
@@ -98,48 +98,66 @@ const isDomainValid = async (email) => {
   }
 };
 
-const generateUserId = () => {
-  return crypto.randomBytes(16).toString('hex');
-};
+const generateUserId = () => crypto.randomBytes(16).toString('hex');
 
+const generateToken = () => crypto.randomBytes(32).toString('hex');
+
+// ==================== Email Verification Functions ====================
 const sendVerificationEmail = async (email, userId) => {
-  const token = crypto.randomBytes(32).toString('hex');
-  
+  const token = generateToken();
   const expiresAt = new Date();
-  expiresAt.setHours(expiresAt.getHours() + 24); // 24 hours from now
-
-  logger.debug('Generated token', { 
-    token, 
-    email, 
-    userId,
-    expiresAt,
-    serverTime: new Date(),
-    firestoreServerTime: FieldValue.serverTimestamp()
-  });
+  expiresAt.setHours(expiresAt.getHours() + 24);
 
   await db.collection('verification-tokens').doc(token).set({
     email,
     userId,
     expiresAt,
     used: false,
+    type: 'email-verification',
     createdAt: FieldValue.serverTimestamp()
   });
 
-  const doc = await db.collection('verification-tokens').doc(token).get();
-  if (!doc.exists) {
-    throw new Error('Token not saved in Firestore');
-  }
-
-  const verificationLink = `${process.env.FRONTEND_URL}//verify-email?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
+  const verificationLink = `${process.env.FRONTEND_URL}/verify-email?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
 
   await transporter.sendMail({
     from: `"SureTalk" <${process.env.EMAIL_USER}>`,
     to: email,
     subject: 'Verify Your Email Address',
     html: `
-      <p>Please click the link below to verify your email:</p>
-      <a href="${verificationLink}">Verify Email</a>
-      <p>Link expires in 24 hours.</p>
+      <p>Welcome to SureTalk! Please verify your email address:</p>
+      <a href="${verificationLink}">Click here to verify your email</a>
+      <p>This link expires in 24 hours.</p>
+      <p>If you didn't create this account, please ignore this email.</p>
+    `
+  });
+};
+
+// ==================== Account Recovery Functions ====================
+const sendRecoveryEmail = async (email, userId) => {
+  const token = generateToken();
+  const expiresAt = new Date();
+  expiresAt.setHours(expiresAt.getHours() + 1);
+
+  await db.collection('recovery-tokens').doc(token).set({
+    email,
+    userId,
+    expiresAt,
+    used: false,
+    type: 'account-recovery',
+    createdAt: FieldValue.serverTimestamp()
+  });
+
+  const recoveryLink = `${process.env.FRONTEND_URL}/recover-account?token=${token}`;
+
+  await transporter.sendMail({
+    from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: 'Account Recovery Request',
+    html: `
+      <p>We received a request to recover your account.</p>
+      <a href="${recoveryLink}">Click here to recover your account</a>
+      <p>This link expires in 1 hour.</p>
+      <p>If you didn't request this, please ignore this email.</p>
     `
   });
 };
@@ -153,13 +171,14 @@ function generateAuthToken(userId) {
 }
 
 // ==================== Routes ====================
+
+// Signup Route
 app.post('/api/signup', limiter, async (req, res) => {
   try {
     let { firstName, email, phone, userPin, userId, ...rest } = req.body;
 
     // Validation
     if (!firstName || !email || !phone || !userPin) {
-      logger.warn('Missing fields', { email });
       return res.status(400).json({ 
         error: 'Missing required fields',
         details: { requires: ['firstName', 'email', 'phone', 'userPin'] }
@@ -169,39 +188,34 @@ app.post('/api/signup', limiter, async (req, res) => {
     const normalizedEmail = sanitizeHtml(email).toLowerCase().trim();
 
     if (!isValidEmail(normalizedEmail)) {
-      logger.warn('Invalid email format', { email: normalizedEmail });
       return res.status(400).json({ error: 'Invalid email format' });
     }
 
     if (isDisposableEmail(normalizedEmail)) {
-      logger.warn('Disposable email attempt', { email: normalizedEmail });
       return res.status(400).json({ error: 'Disposable emails not allowed' });
     }
 
     if (!(await isDomainValid(normalizedEmail))) {
-      logger.warn('Invalid email domain', { email: normalizedEmail });
       return res.status(400).json({ error: 'Email domain does not exist' });
     }
 
     // Generate userId if not provided
     userId = userId || generateUserId();
 
-    // Check for existing email or userId
+    // Check for existing user
     const usersRef = db.collection('users');
     const emailQuery = await usersRef.where('email', '==', normalizedEmail).limit(1).get();
     const userIdQuery = await usersRef.where('userId', '==', userId).limit(1).get();
 
     if (!emailQuery.empty) {
-      logger.warn('Duplicate email attempt', { email: normalizedEmail });
       return res.status(409).json({ error: 'Email already registered' });
     }
 
     if (!userIdQuery.empty) {
-      logger.warn('Duplicate userId attempt', { userId });
       return res.status(409).json({ error: 'User ID already exists' });
     }
 
-    // Create user with userId as document ID
+    // Create user
     await usersRef.doc(userId).set({
       userId,
       firstName: sanitizeHtml(firstName),
@@ -228,10 +242,7 @@ app.post('/api/signup', limiter, async (req, res) => {
     });
 
   } catch (error) {
-    logger.error('Signup failed', { 
-      error: error.message,
-      stack: error.stack 
-    });
+    logger.error('Signup failed', { error: error.message });
     res.status(500).json({ 
       error: 'Registration failed',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -239,38 +250,37 @@ app.post('/api/signup', limiter, async (req, res) => {
   }
 });
 
-// ==================== Email Verification Route ====================
+// Email Verification Route
 app.get('/api/verify-email', async (req, res) => {
   const { token, email, userId } = req.query;
   
   try {
-    // 1. Validate token exists
+    // Validate token exists
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
     if (!tokenDoc.exists) {
-      logger.error('Token not found', { token });
-      return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=invalid_token');
+      return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=invalid_token`);
     }
 
-    // 2. Check token usage and expiration
     const tokenData = tokenDoc.data();
+    
+    // Check token usage and expiration
     if (tokenData.used) {
-      return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=used_token');
+      return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=used_token`);
     }
 
     let expiresAt = tokenData.expiresAt;
     if (expiresAt?.toDate) expiresAt = expiresAt.toDate();
     if (new Date() > new Date(expiresAt)) {
-      return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=expired_token');
+      return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=expired_token`);
     }
 
-    // 3. Verify user exists
+    // Verify user exists
     const userDoc = await db.collection('users').doc(userId).get();
     if (!userDoc.exists) {
-      logger.error('User not found during verification', { userId });
-      return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=user_not_found');
+      return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=user_not_found`);
     }
 
-    // 4. Update records
+    // Update records
     await db.collection('verification-tokens').doc(token).update({ used: true });
     await db.collection('users').doc(userId).update({
       emailVerified: true,
@@ -278,15 +288,124 @@ app.get('/api/verify-email', async (req, res) => {
       updatedAt: FieldValue.serverTimestamp()
     });
 
-    // 5. Successful redirect
+    // Successful redirect
     res.setHeader('Cache-Control', 'no-store');
-    return res.redirect('https://buy.stripe.com/bIY1806DG7qw6uk144?verified=true');
+    return res.redirect(`${process.env.FRONTEND_URL}/verification-success`);
 
   } catch (error) {
     logger.error('Verification failed', { error: error.message });
-    return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=server_error');
+    return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=server_error`);
   }
 });
+
+// Account Recovery Routes
+
+// Request recovery
+app.post('/api/request-recovery', limiter, async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const normalizedEmail = sanitizeHtml(email).toLowerCase().trim();
+
+    // Check if user exists
+    const querySnapshot = await db.collection('users')
+      .where('email', '==', normalizedEmail)
+      .limit(1)
+      .get();
+
+    if (querySnapshot.empty) {
+      return res.status(404).json({ error: 'No account found with this email' });
+    }
+
+    const user = querySnapshot.docs[0].data();
+    await sendRecoveryEmail(normalizedEmail, user.userId);
+
+    res.json({ 
+      success: true, 
+      message: 'Recovery email sent. Please check your inbox.' 
+    });
+
+  } catch (error) {
+    logger.error('Recovery request failed', { error });
+    res.status(500).json({ error: 'Account recovery failed' });
+  }
+});
+
+// Complete recovery
+app.post('/api/complete-recovery', limiter, async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Recovery token is required' });
+    }
+
+    // Get token document
+    const tokenDoc = await db.collection('recovery-tokens').doc(token).get();
+    if (!tokenDoc.exists) {
+      return res.status(404).json({ error: 'Invalid or expired recovery link' });
+    }
+
+    const tokenData = tokenDoc.data();
+    
+    // Check token status
+    if (tokenData.used) {
+      return res.status(400).json({ error: 'This recovery link has already been used' });
+    }
+
+    let expiresAt = tokenData.expiresAt;
+    if (expiresAt.toDate) expiresAt = expiresAt.toDate();
+    if (new Date() > expiresAt) {
+      return res.status(400).json({ error: 'This recovery link has expired' });
+    }
+
+    // Get user data
+    const userDoc = await db.collection('users').doc(tokenData.userId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Generate temporary PIN
+    const tempPin = Math.floor(1000 + Math.random() * 9000).toString();
+    const tempPinExpiry = new Date();
+    tempPinExpiry.setHours(tempPinExpiry.getHours() + 1);
+
+    // Update records
+    await db.collection('recovery-tokens').doc(token).update({ used: true });
+    await db.collection('users').doc(tokenData.userId).update({
+      tempPin: await bcrypt.hash(tempPin, 12),
+      tempPinExpiry,
+      requiresPinReset: true
+    });
+
+    // Send email with temporary PIN
+    await transporter.sendMail({
+      from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
+      to: tokenData.email,
+      subject: 'Your Temporary Access Details',
+      html: `
+        <p>Here are your temporary access details:</p>
+        <p><strong>User ID:</strong> ${tokenData.userId}</p>  
+        <p><strong>Temporary PIN:</strong> ${tempPin}</p>
+        <p>This PIN will expire in 1 hour.</p>
+      `
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Temporary access details have been sent to your email' 
+    });
+
+  } catch (error) {
+    logger.error('Recovery completion failed', { error });
+    res.status(500).json({ error: 'Failed to complete account recovery' });
+  }
+});
+
 
 // ==================== Google Auth Endpoint ====================
 app.post('/api/google-auth', async (req, res) => {
@@ -371,164 +490,57 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// ==================== Recovery Endpoints ====================
-
-// Request recovery
-app.post('/api/request-recovery', limiter, async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ error: 'Email is required' });
-    }
-
-    const normalizedEmail = sanitizeHtml(email).toLowerCase().trim();
-
-    // Check if user exists
-    const querySnapshot = await db.collection('users')
-      .where('email', '==', normalizedEmail)
-      .limit(1)
-      .get();
-
-    if (querySnapshot.empty) {
-      return res.status(404).json({ error: 'No account found with this email' });
-    }
-
-    const userDoc = querySnapshot.docs[0];
-    const user = userDoc.data();
-
-    // Generate recovery token
-    const recoveryToken = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 1); // 1 hour expiration
-
-    // Save recovery token
-    await db.collection('recovery-tokens').doc(recoveryToken).set({
-      email: normalizedEmail,
-      userId: user.userId,
-      expiresAt,
-      used: false,
-      createdAt: FieldValue.serverTimestamp()
-    });
-
-    // Send recovery email
-    const recoveryLink = `${process.env.FRONTEND_URL}/recover-account?token=${recoveryToken}`;
-    
-    await transporter.sendMail({
-      from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
-      to: normalizedEmail,
-      subject: 'Account Recovery Request',
-      html: `
-        <p>We received a request to recover your account information.</p>
-        <p>Click the link below to view your User ID and PIN (valid for 1 hour):</p>
-        <a href="${recoveryLink}">Recover Account</a>
-        <p>If you didn't request this, please ignore this email.</p>
-      `
-    });
-
-    res.json({ 
-      success: true, 
-      message: 'Recovery email sent. Please check your inbox.' 
-    });
-
-  } catch (error) {
-    logger.error('Recovery request failed', { error });
-    res.status(500).json({ error: 'Account recovery failed' });
-  }
-});
-
-// Verify recovery token and send credentials
-app.post('/api/complete-recovery', limiter, async (req, res) => {
-  try {
-    console.log("Recovery request body:", req.body);
-    const { token } = req.body;
-
-    if (!token) {
-      console.log("Missing token in request");
-      return res.status(400).json({ error: 'Recovery token is required' });
-    }
-
-    // Get token document with timeout - FIXED SYNTAX
-    const tokenDoc = await Promise.race([
-      db.collection('recovery-tokens').doc(token).get(),
-      new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Firestore timeout')), 5000);
-      })
-    ]);
-    
-    if (!tokenDoc.exists) {
-      return res.status(404).json({ error: 'Invalid or expired recovery link' });
-    }
-
-    const tokenData = tokenDoc.data();
-    
-    // Check if token is used or expired
-    if (tokenData.used) {
-      return res.status(400).json({ error: 'This recovery link has already been used' });
-    }
-
-    let expiresAt = tokenData.expiresAt;
-    if (expiresAt.toDate) expiresAt = expiresAt.toDate();
-    if (new Date() > expiresAt) {
-      return res.status(400).json({ error: 'This recovery link has expired' });
-    }
-
-    // Get user data
-    const userDoc = await db.collection('users').doc(tokenData.userId).get();
-    if (!userDoc.exists) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const user = userDoc.data();
-
-    // Generate 4-digit temporary PIN
-    const tempPin = Math.floor(1000 + Math.random() * 9000).toString();
-    const tempPinExpiry = new Date();
-    tempPinExpiry.setHours(tempPinExpiry.getHours() + 1); // Expires in 1 hour
-
-    // Mark token as used and update user with temp PIN
-    await db.collection('recovery-tokens').doc(token).update({ used: true });
-    await db.collection('users').doc(tokenData.userId).update({
-      tempPin: await bcrypt.hash(tempPin, 12),
-      tempPinExpiry,
-      requiresPinReset: true
-    });
-
-    console.log("Final Email HTML:", `
-      <p>Temporary PIN: ${tempPin}</p>
-    `);
-
-    // Send email with User ID + Temporary PIN
-    await transporter.sendMail({
-      from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
-      to: tokenData.email,
-      subject: 'Your Temporary Access Details',
-      html: `
-        <p>Here are your temporary access details:</p>
-        <p><strong>User ID:</strong> ${user.userId}</p>  
-        <p><strong>Temporary PIN:</strong> ${tempPin}</p>
-        <p>This PIN will expire in 1 hour. You will be required to set a new PIN after login.</p>
-        <p>If you didn't request this, please contact our support team immediately.</p>
-      `
-    });
-
-    res.json({ 
-      success: true, 
-      message: 'Temporary access details have been sent to your email' 
-    });
-
-  } catch (error) {
-    logger.error('Recovery completion failed', { error });
-    res.status(500).json({ error: 'Failed to complete account recovery' });
-  }
-});
-
 // ==================== Server Startup ====================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   logger.info(`Server started on port ${PORT}`, {
     environment: process.env.NODE_ENV || 'development',
-    allowedOrigins,
-    serverTime: new Date()
+    allowedOrigins
   });
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
