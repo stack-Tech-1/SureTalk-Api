@@ -245,48 +245,47 @@ app.get('/api/verify-email', async (req, res) => {
   const { token, email, userId } = req.query;
   
   try {
-    logger.debug('Verification attempt', { token, email, userId });
-
+    // 1. Validate token exists
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
-    
     if (!tokenDoc.exists) {
-      return res.redirect('http://suretalknow.com?error=invalid_token');
+      logger.error('Token not found', { token });
+      return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=invalid_token');
     }
 
+    // 2. Check token usage and expiration
     const tokenData = tokenDoc.data();
-    let expiresAt = tokenData.expiresAt;
-    
-    if (expiresAt.toDate) expiresAt = expiresAt.toDate();
-    if (typeof expiresAt === 'string') expiresAt = new Date(expiresAt);
-
     if (tokenData.used) {
       return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=used_token');
     }
 
-    if (new Date() > expiresAt) {
+    let expiresAt = tokenData.expiresAt;
+    if (expiresAt?.toDate) expiresAt = expiresAt.toDate();
+    if (new Date() > new Date(expiresAt)) {
       return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=expired_token');
     }
 
-    if (tokenData.email !== email || tokenData.userId !== userId) {
-      return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=email_mismatch');
+    // 3. Verify user exists
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      logger.error('User not found during verification', { userId });
+      return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=user_not_found');
     }
 
-    // Update database
+    // 4. Update records
     await db.collection('verification-tokens').doc(token).update({ used: true });
-    
-    // Update user document using userId
     await db.collection('users').doc(userId).update({
       emailVerified: true,
       status: 'active',
       updatedAt: FieldValue.serverTimestamp()
     });
 
-    logger.info('Email verified successfully', { userId, email });
+    // 5. Successful redirect
+    res.setHeader('Cache-Control', 'no-store');
     return res.redirect('https://buy.stripe.com/bIY1806DG7qw6uk144?verified=true');
 
   } catch (error) {
-    logger.error('Verification failed', { error });
-    return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=verification_failed');
+    logger.error('Verification failed', { error: error.message });
+    return res.redirect('https://suretalk-signup.onrender.com/failedEmailVerification.html?error=server_error');
   }
 });
 
