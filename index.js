@@ -351,25 +351,26 @@ app.get('/api/verify-email', async (req, res) => {
         </div>
 
          <script>
-          // Simple, reliable countdown implementation
-          document.addEventListener('DOMContentLoaded', function() {
-            var countdownElement = document.getElementById('countdown');
-            var seconds = 10;
-            
-            function updateCountdown() {
-              countdownElement.textContent = seconds;
-              seconds--;
-              
-              if (seconds < 0) {
-                window.location.href = 'https://buy.stripe.com/bIY1806DG7qw6uk144';
-              } else {
-                setTimeout(updateCountdown, 1000);
-              }
-            }
-            
-            updateCountdown();
-          });
-        </script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var countdownElement = document.getElementById('countdown');
+    var seconds = 10;
+
+    function updateCountdown() {
+      seconds--;
+      if (seconds < 0) {
+        window.location.href = 'https://buy.stripe.com/bIY1806DG7qw6uk144';
+      } else {
+        countdownElement.textContent = seconds;
+        setTimeout(updateCountdown, 1000);
+      }
+    }
+
+    // Show the initial number first
+    countdownElement.textContent = seconds;
+    setTimeout(updateCountdown, 1000);
+  });
+</script>
+
       </body>
       </html>
     `);
