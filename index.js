@@ -290,7 +290,8 @@ app.get('/api/verify-email', async (req, res) => {
       updatedAt: FieldValue.serverTimestamp()
     });
 
-    // 5. Send HTML page that shows success and then redirects
+    // 5. Send HTML response with success message and redirect
+    res.setHeader('Content-Type', 'text/html');
     res.setHeader('Cache-Control', 'no-store');
     res.send(`
       <!DOCTYPE html>
@@ -324,8 +325,8 @@ app.get('/api/verify-email', async (req, res) => {
       </head>
       <body>
         <div class="container">
-          <h1>Email Verified Successfully!</h1>
-          <p>Your email address has been confirmed.</p>
+          <h1>🎉 Email Verified Successfully!</h1>
+          <p>Thank you for verifying your email address.</p>
           <p class="countdown">Redirecting to payment page in <span id="count">10</span> seconds...</p>
           <p>If you are not redirected automatically, <a href="https://buy.stripe.com/bIY1806DG7qw6uk144">click here</a>.</p>
         </div>
