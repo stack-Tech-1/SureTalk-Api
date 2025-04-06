@@ -471,6 +471,147 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// ==================== Account Recovery Endpoints ====================
+
+// Request recovery
+app.post('/api/request-recovery', limiter, async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const normalizedEmail = sanitizeHtml(email).toLowerCase().trim();
+
+    // Check if user exists
+    const querySnapshot = await db.collection('users')
+      .where('email', '==', normalizedEmail)
+      .limit(1)
+      .get();
+
+    if (querySnapshot.empty) {
+      return res.status(404).json({ error: 'No account found with this email' });
+    }
+
+    const userDoc = querySnapshot.docs[0];
+    const user = userDoc.data();
+
+    // Generate recovery token
+    const recoveryToken = generateToken();
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 1); // 1 hour expiration
+
+    // Save recovery token
+    await db.collection('recovery-tokens').doc(recoveryToken).set({
+      email: normalizedEmail,
+      userId: user.userId,
+      expiresAt,
+      used: false,
+      type: 'account-recovery',
+      createdAt: FieldValue.serverTimestamp()
+    });
+
+    // Send recovery email
+    const recoveryLink = `${process.env.FRONTEND_URL}/recover-account?token=${recoveryToken}`;
+    
+    await transporter.sendMail({
+      from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
+      to: normalizedEmail,
+      subject: 'Account Recovery Request',
+      html: `
+        <p>We received a request to recover your account information.</p>
+        <p>Click the link below to view your User ID and PIN (valid for 1 hour):</p>
+        <a href="${recoveryLink}">Recover Account</a>
+        <p>If you didn't request this, please ignore this email.</p>
+      `
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Recovery email sent. Please check your inbox.' 
+    });
+
+  } catch (error) {
+    logger.error('Recovery request failed', { error });
+    res.status(500).json({ error: 'Account recovery failed' });
+  }
+});
+
+// Complete recovery
+app.post('/api/complete-recovery', limiter, async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Recovery token is required' });
+    }
+
+    // Get token document
+    const tokenDoc = await db.collection('recovery-tokens').doc(token).get();
+    if (!tokenDoc.exists) {
+      return res.status(404).json({ error: 'Invalid or expired recovery link' });
+    }
+
+    const tokenData = tokenDoc.data();
+    
+    // Check token status
+    if (tokenData.used) {
+      return res.status(400).json({ error: 'This recovery link has already been used' });
+    }
+
+    let expiresAt = tokenData.expiresAt;
+    if (expiresAt?.toDate) expiresAt = expiresAt.toDate();
+    if (new Date() > new Date(expiresAt)) {
+      return res.status(400).json({ error: 'This recovery link has expired' });
+    }
+
+    // Get user data
+    const userDoc = await db.collection('users').doc(tokenData.userId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userDoc.data();
+
+    // Generate 4-digit temporary PIN
+    const tempPin = Math.floor(1000 + Math.random() * 9000).toString();
+    const tempPinExpiry = new Date();
+    tempPinExpiry.setHours(tempPinExpiry.getHours() + 1); // Expires in 1 hour
+
+    // Mark token as used and update user with temp PIN
+    await db.collection('recovery-tokens').doc(token).update({ used: true });
+    await db.collection('users').doc(tokenData.userId).update({
+      tempPin: await bcrypt.hash(tempPin, 12),
+      tempPinExpiry,
+      requiresPinReset: true
+    });
+
+    // Send email with User ID + Temporary PIN
+    await transporter.sendMail({
+      from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
+      to: tokenData.email,
+      subject: 'Your Temporary Access Details',
+      html: `
+        <p>Here are your temporary access details:</p>
+        <p><strong>User ID:</strong> ${user.userId}</p>  
+        <p><strong>Temporary PIN:</strong> ${tempPin}</p>
+        <p>This PIN will expire in 1 hour. You will be required to set a new PIN after login.</p>
+        <p>If you didn't request this, please contact our support team immediately.</p>
+      `
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Temporary access details have been sent to your email' 
+    });
+
+  } catch (error) {
+    logger.error('Recovery completion failed', { error });
+    res.status(500).json({ error: 'Failed to complete account recovery' });
+  }
+});
+
 // ==================== Server Startup ====================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
