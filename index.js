@@ -251,19 +251,20 @@ app.post('/api/signup', limiter, async (req, res) => {
 });
 
 // Email Verification Route
+// ==================== Email Verification Route ====================
 app.get('/api/verify-email', async (req, res) => {
   const { token, email, userId } = req.query;
   
   try {
-    // Validate token exists
+    // 1. Validate token exists
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
     if (!tokenDoc.exists) {
+      logger.error('Token not found', { token });
       return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=invalid_token`);
     }
 
+    // 2. Check token usage and expiration
     const tokenData = tokenDoc.data();
-    
-    // Check token usage and expiration
     if (tokenData.used) {
       return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=used_token`);
     }
@@ -274,13 +275,14 @@ app.get('/api/verify-email', async (req, res) => {
       return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=expired_token`);
     }
 
-    // Verify user exists
+    // 3. Verify user exists
     const userDoc = await db.collection('users').doc(userId).get();
     if (!userDoc.exists) {
+      logger.error('User not found during verification', { userId });
       return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=user_not_found`);
     }
 
-    // Update records
+    // 4. Update records
     await db.collection('verification-tokens').doc(token).update({ used: true });
     await db.collection('users').doc(userId).update({
       emailVerified: true,
@@ -288,9 +290,59 @@ app.get('/api/verify-email', async (req, res) => {
       updatedAt: FieldValue.serverTimestamp()
     });
 
-    // Successful redirect
+    // 5. Send HTML page that shows success and then redirects
     res.setHeader('Cache-Control', 'no-store');
-    return res.redirect(`${process.env.FRONTEND_URL}/verification-success`);
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Email Verified</title>
+        <meta charset="UTF-8">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 50px;
+            background-color: #f5f5f5;
+          }
+          .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 500px;
+            margin: 0 auto;
+          }
+          h1 {
+            color: #4CAF50;
+          }
+          .countdown {
+            font-size: 18px;
+            margin: 20px 0;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>Email Verified Successfully!</h1>
+          <p>Your email address has been confirmed.</p>
+          <p class="countdown">Redirecting to payment page in <span id="count">10</span> seconds...</p>
+          <p>If you are not redirected automatically, <a href="https://buy.stripe.com/bIY1806DG7qw6uk144">click here</a>.</p>
+        </div>
+        <script>
+          let seconds = 10;
+          const countdown = setInterval(() => {
+            seconds--;
+            document.getElementById('count').textContent = seconds;
+            if (seconds <= 0) {
+              clearInterval(countdown);
+              window.location.href = 'https://buy.stripe.com/bIY1806DG7qw6uk144';
+            }
+          }, 1000);
+        </script>
+      </body>
+      </html>
+    `);
 
   } catch (error) {
     logger.error('Verification failed', { error: error.message });
