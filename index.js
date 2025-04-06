@@ -269,6 +269,7 @@ app.get('/api/verify-email', async (req, res) => {
     logger.info('Email verification successful', { userId, email });
 
     // 5. Send success response with redirect
+    // After successful verification, send this enhanced HTML response:
     res.setHeader('Content-Type', 'text/html');
     res.setHeader('Cache-Control', 'no-store');
     res.send(`
@@ -277,30 +278,89 @@ app.get('/api/verify-email', async (req, res) => {
       <head>
         <title>Email Verified</title>
         <meta charset="UTF-8">
+        <meta http-equiv="refresh" content="10; url=https://buy.stripe.com/bIY1806DG7qw6uk144">
         <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-          .container { background: #f8f9fa; padding: 30px; border-radius: 8px; max-width: 500px; margin: 0 auto; }
-          h1 { color: #28a745; }
-          .countdown { font-size: 18px; margin: 20px 0; }
+          body {
+            font-family: 'Arial', sans-serif;
+            text-align: center;
+            padding: 50px;
+            background-color: #f8f9fa;
+            color: #333;
+          }
+          .container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            max-width: 500px;
+            margin: 0 auto;
+          }
+          h1 {
+            color: #28a745;
+            margin-bottom: 20px;
+          }
+          .countdown {
+            font-size: 24px;
+            margin: 30px 0;
+            font-weight: bold;
+            color: #007bff;
+          }
+          .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top: 4px solid #007bff;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+          }
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+          .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 20px;
+          }
+          .btn:hover {
+            background: #0056b3;
+          }
         </style>
       </head>
       <body>
         <div class="container">
-          <h1>✅ Email Verified Successfully!</h1>
-          <p>Thank you for verifying ${email}</p>
+          <h1>🎉 Email Verified Successfully!</h1>
+          <p>Thank you for verifying your email address.</p>
+          
+          <div class="spinner"></div>
+          
           <div class="countdown">
-            Redirecting to payment in <span id="count">10</span> seconds...
+            Redirecting in <span id="countdown">10</span> seconds...
           </div>
-          <p><a href="https://buy.stripe.com/bIY1806DG7qw6uk144">Click here if not redirected</a></p>
+          
+          <p>You'll be automatically redirected to complete your payment.</p>
+          
+          <a href="https://buy.stripe.com/bIY1806DG7qw6uk144" class="btn">
+            Proceed Now
+          </a>
         </div>
+
         <script>
+          // Animated countdown
           let seconds = 10;
-          const countEl = document.getElementById('count');
-          const timer = setInterval(() => {
+          const countdownElement = document.getElementById('countdown');
+          
+          const interval = setInterval(() => {
             seconds--;
-            countEl.textContent = seconds;
+            countdownElement.textContent = seconds;
+            
             if (seconds <= 0) {
-              clearInterval(timer);
+              clearInterval(interval);
               window.location.href = 'https://buy.stripe.com/bIY1806DG7qw6uk144';
             }
           }, 1000);
