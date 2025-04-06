@@ -256,22 +256,28 @@ app.get('/api/verify-email', async (req, res) => {
   const { token, email, userId } = req.query;
   
   try {
+    logger.info('Verification attempt started', { token, email, userId });
+
     // 1. Validate token exists
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
     if (!tokenDoc.exists) {
-      logger.error('Token not found', { token });
+      logger.error('Token not found in Firestore', { token });
       return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=invalid_token`);
     }
 
     // 2. Check token usage and expiration
     const tokenData = tokenDoc.data();
+    logger.debug('Token data from Firestore', tokenData);
+
     if (tokenData.used) {
+      logger.warn('Token already used', { token });
       return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=used_token`);
     }
 
     let expiresAt = tokenData.expiresAt;
     if (expiresAt?.toDate) expiresAt = expiresAt.toDate();
     if (new Date() > new Date(expiresAt)) {
+      logger.warn('Token expired', { token, expiresAt });
       return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=expired_token`);
     }
 
@@ -290,7 +296,9 @@ app.get('/api/verify-email', async (req, res) => {
       updatedAt: FieldValue.serverTimestamp()
     });
 
-    // 5. Send HTML response with success message and redirect
+    logger.info('Email verification successful', { userId, email });
+
+    // 5. Send success response
     res.setHeader('Content-Type', 'text/html');
     res.setHeader('Cache-Control', 'no-store');
     res.send(`
@@ -300,43 +308,29 @@ app.get('/api/verify-email', async (req, res) => {
         <title>Email Verified</title>
         <meta charset="UTF-8">
         <style>
-          body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            padding: 50px;
-            background-color: #f5f5f5;
-          }
-          .container {
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            max-width: 500px;
-            margin: 0 auto;
-          }
-          h1 {
-            color: #4CAF50;
-          }
-          .countdown {
-            font-size: 18px;
-            margin: 20px 0;
-          }
+          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+          .container { background: #f8f9fa; padding: 30px; border-radius: 8px; max-width: 500px; margin: 0 auto; }
+          h1 { color: #28a745; }
+          .countdown { font-size: 18px; margin: 20px 0; }
         </style>
       </head>
       <body>
         <div class="container">
-          <h1>🎉 Email Verified Successfully!</h1>
-          <p>Thank you for verifying your email address.</p>
-          <p class="countdown">Redirecting to payment page in <span id="count">10</span> seconds...</p>
-          <p>If you are not redirected automatically, <a href="https://buy.stripe.com/bIY1806DG7qw6uk144">click here</a>.</p>
+          <h1>✅ Email Verified Successfully!</h1>
+          <p>Thank you for verifying ${email}</p>
+          <div class="countdown">
+            Redirecting to payment in <span id="count">10</span> seconds...
+          </div>
+          <p><a href="https://buy.stripe.com/bIY1806DG7qw6uk144">Click here if not redirected</a></p>
         </div>
         <script>
           let seconds = 10;
-          const countdown = setInterval(() => {
+          const countEl = document.getElementById('count');
+          const timer = setInterval(() => {
             seconds--;
-            document.getElementById('count').textContent = seconds;
+            countEl.textContent = seconds;
             if (seconds <= 0) {
-              clearInterval(countdown);
+              clearInterval(timer);
               window.location.href = 'https://buy.stripe.com/bIY1806DG7qw6uk144';
             }
           }, 1000);
@@ -346,116 +340,14 @@ app.get('/api/verify-email', async (req, res) => {
     `);
 
   } catch (error) {
-    logger.error('Verification failed', { error: error.message });
+    logger.error('Verification failed', { 
+      error: error.message,
+      stack: error.stack,
+      token,
+      email,
+      userId
+    });
     return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=server_error`);
-  }
-});
-
-// Account Recovery Routes
-
-// Request recovery
-app.post('/api/request-recovery', limiter, async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ error: 'Email is required' });
-    }
-
-    const normalizedEmail = sanitizeHtml(email).toLowerCase().trim();
-
-    // Check if user exists
-    const querySnapshot = await db.collection('users')
-      .where('email', '==', normalizedEmail)
-      .limit(1)
-      .get();
-
-    if (querySnapshot.empty) {
-      return res.status(404).json({ error: 'No account found with this email' });
-    }
-
-    const user = querySnapshot.docs[0].data();
-    await sendRecoveryEmail(normalizedEmail, user.userId);
-
-    res.json({ 
-      success: true, 
-      message: 'Recovery email sent. Please check your inbox.' 
-    });
-
-  } catch (error) {
-    logger.error('Recovery request failed', { error });
-    res.status(500).json({ error: 'Account recovery failed' });
-  }
-});
-
-// Complete recovery
-app.post('/api/complete-recovery', limiter, async (req, res) => {
-  try {
-    const { token } = req.body;
-
-    if (!token) {
-      return res.status(400).json({ error: 'Recovery token is required' });
-    }
-
-    // Get token document
-    const tokenDoc = await db.collection('recovery-tokens').doc(token).get();
-    if (!tokenDoc.exists) {
-      return res.status(404).json({ error: 'Invalid or expired recovery link' });
-    }
-
-    const tokenData = tokenDoc.data();
-    
-    // Check token status
-    if (tokenData.used) {
-      return res.status(400).json({ error: 'This recovery link has already been used' });
-    }
-
-    let expiresAt = tokenData.expiresAt;
-    if (expiresAt.toDate) expiresAt = expiresAt.toDate();
-    if (new Date() > expiresAt) {
-      return res.status(400).json({ error: 'This recovery link has expired' });
-    }
-
-    // Get user data
-    const userDoc = await db.collection('users').doc(tokenData.userId).get();
-    if (!userDoc.exists) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // Generate temporary PIN
-    const tempPin = Math.floor(1000 + Math.random() * 9000).toString();
-    const tempPinExpiry = new Date();
-    tempPinExpiry.setHours(tempPinExpiry.getHours() + 1);
-
-    // Update records
-    await db.collection('recovery-tokens').doc(token).update({ used: true });
-    await db.collection('users').doc(tokenData.userId).update({
-      tempPin: await bcrypt.hash(tempPin, 12),
-      tempPinExpiry,
-      requiresPinReset: true
-    });
-
-    // Send email with temporary PIN
-    await transporter.sendMail({
-      from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
-      to: tokenData.email,
-      subject: 'Your Temporary Access Details',
-      html: `
-        <p>Here are your temporary access details:</p>
-        <p><strong>User ID:</strong> ${tokenData.userId}</p>  
-        <p><strong>Temporary PIN:</strong> ${tempPin}</p>
-        <p>This PIN will expire in 1 hour.</p>
-      `
-    });
-
-    res.json({ 
-      success: true, 
-      message: 'Temporary access details have been sent to your email' 
-    });
-
-  } catch (error) {
-    logger.error('Recovery completion failed', { error });
-    res.status(500).json({ error: 'Failed to complete account recovery' });
   }
 });
 
