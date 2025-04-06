@@ -440,86 +440,153 @@ app.post('/api/request-recovery', limiter, async (req, res) => {
 // Verify recovery token and send credentials
 app.post('/api/complete-recovery', limiter, async (req, res) => {
   try {
-    console.log("Recovery request body:", req.body);
     const { token } = req.body;
-
+    
+    // Enhanced validation and logging
     if (!token) {
-      console.log("Missing token in request");
+      logger.error('Missing token in request');
       return res.status(400).json({ error: 'Recovery token is required' });
     }
 
-    // Get token document with timeout - FIXED SYNTAX
-    const tokenDoc = await Promise.race([
-      db.collection('recovery-tokens').doc(token).get(),
-      new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Firestore timeout')), 5000);
-      })
-    ]);
-    
+    if (token.length !== 64) {
+      logger.error('Invalid token length', { tokenLength: token.length });
+      return res.status(400).json({ error: 'Invalid token format' });
+    }
+
+    logger.debug('Processing recovery token', { 
+      tokenPrefix: token.substring(0, 8) + '...',
+      collection: 'recovery-tokens'
+    });
+
+    // Debug: List all tokens in collection (remove in production)
+    const allTokens = await db.collection('recovery-tokens').limit(5).get();
+    logger.debug('First 5 tokens in collection', {
+      tokens: allTokens.docs.map(doc => doc.id)
+    });
+
+    // Get token document with proper error handling
+    let tokenDoc;
+    try {
+      tokenDoc = await db.collection('recovery-tokens').doc(token).get();
+    } catch (err) {
+      logger.error('Firestore query failed', { error: err.message });
+      return res.status(500).json({ error: 'Database error' });
+    }
+
     if (!tokenDoc.exists) {
-      return res.status(404).json({ error: 'Invalid or expired recovery link' });
+      logger.error('Token not found in Firestore', { 
+        token: token,
+        collection: 'recovery-tokens'
+      });
+      return res.status(404).json({ 
+        error: 'Invalid or expired recovery link',
+        code: 'TOKEN_NOT_FOUND'
+      });
     }
 
     const tokenData = tokenDoc.data();
-    
-    // Check if token is used or expired
-    if (tokenData.used) {
-      return res.status(400).json({ error: 'This recovery link has already been used' });
-    }
-
-    let expiresAt = tokenData.expiresAt;
-    if (expiresAt.toDate) expiresAt = expiresAt.toDate();
-    if (new Date() > expiresAt) {
-      return res.status(400).json({ error: 'This recovery link has expired' });
-    }
-
-    // Get user data
-    const userDoc = await db.collection('users').doc(tokenData.userId).get();
-    if (!userDoc.exists) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const user = userDoc.data();
-
-    // Generate 4-digit temporary PIN
-    const tempPin = Math.floor(1000 + Math.random() * 9000).toString();
-    const tempPinExpiry = new Date();
-    tempPinExpiry.setHours(tempPinExpiry.getHours() + 1); // Expires in 1 hour
-
-    // Mark token as used and update user with temp PIN
-    await db.collection('recovery-tokens').doc(token).update({ used: true });
-    await db.collection('users').doc(tokenData.userId).update({
-      tempPin: await bcrypt.hash(tempPin, 12),
-      tempPinExpiry,
-      requiresPinReset: true
+    logger.debug('Token document found', { 
+      email: tokenData.email,
+      userId: tokenData.userId,
+      expiresAt: tokenData.expiresAt,
+      used: tokenData.used
     });
 
-    console.log("Final Email HTML:", `
-      <p>Temporary PIN: ${tempPin}</p>
-    `);
+    // Convert Firestore timestamp if needed
+    let expiresAt = tokenData.expiresAt;
+    if (expiresAt?.toDate) expiresAt = expiresAt.toDate();
+    if (typeof expiresAt === 'string') expiresAt = new Date(expiresAt);
 
-    // Send email with User ID + Temporary PIN
+    // Validation checks
+    if (tokenData.used) {
+      logger.warn('Recovery token already used', { token });
+      return res.status(400).json({ 
+        error: 'This recovery link has already been used',
+        code: 'TOKEN_USED'
+      });
+    }
+
+    if (new Date() > new Date(expiresAt)) {
+      logger.warn('Recovery token expired', { 
+        token, 
+        expiresAt,
+        currentTime: new Date() 
+      });
+      return res.status(400).json({ 
+        error: 'This recovery link has expired',
+        code: 'TOKEN_EXPIRED'
+      });
+    }
+
+    // Get user document
+    const userDoc = await db.collection('users').doc(tokenData.userId).get();
+    if (!userDoc.exists) {
+      logger.error('User not found during recovery', { 
+        userId: tokenData.userId 
+      });
+      return res.status(404).json({ 
+        error: 'User account not found',
+        code: 'USER_NOT_FOUND'
+      });
+    }
+
+    // Generate secure temporary PIN
+    const tempPin = crypto.randomInt(1000, 9999).toString();
+    const tempPinExpiry = new Date(Date.now() + 3600000); // 1 hour
+    
+    // Batch write for atomic updates
+    const batch = db.batch();
+    batch.update(db.collection('recovery-tokens').doc(token), { 
+      used: true,
+      usedAt: FieldValue.serverTimestamp() 
+    });
+    batch.update(db.collection('users').doc(tokenData.userId), {
+      tempPin: await bcrypt.hash(tempPin, 12),
+      tempPinExpiry,
+      requiresPinReset: true,
+      updatedAt: FieldValue.serverTimestamp()
+    });
+    
+    await batch.commit();
+
+    // Send email with temporary credentials
     await transporter.sendMail({
       from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
       to: tokenData.email,
       subject: 'Your Temporary Access Details',
       html: `
-        <p>Here are your temporary access details:</p>
-        <p><strong>User ID:</strong> ${user.userId}</p>  
-        <p><strong>Temporary PIN:</strong> ${tempPin}</p>
-        <p>This PIN will expire in 1 hour. You will be required to set a new PIN after login.</p>
-        <p>If you didn't request this, please contact our support team immediately.</p>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #2c3e50;">Account Recovery</h2>
+          <p>Here are your temporary access details:</p>
+          <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p><strong>User ID:</strong> <span style="font-family: monospace;">${tokenData.userId}</span></p>
+            <p><strong>Temporary PIN:</strong> <span style="font-size: 1.2em; font-weight: bold;">${tempPin}</span></p>
+            <p><em>Expires: ${tempPinExpiry.toLocaleString()}</em></p>
+          </div>
+          <p style="color: #7f8c8d;">If you didn't request this, please secure your account immediately.</p>
+        </div>
       `
     });
 
-    res.json({ 
-      success: true, 
-      message: 'Temporary access details have been sent to your email' 
+    logger.info('Recovery completed successfully', { 
+      userId: tokenData.userId,
+      email: tokenData.email 
+    });
+
+    return res.json({ 
+      success: true,
+      message: 'Temporary access details have been sent to your email'
     });
 
   } catch (error) {
-    logger.error('Recovery completion failed', { error });
-    res.status(500).json({ error: 'Failed to complete account recovery' });
+    logger.error('Recovery completion failed', {
+      error: error.message,
+      stack: error.stack
+    });
+    return res.status(500).json({ 
+      error: 'Failed to complete account recovery',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
