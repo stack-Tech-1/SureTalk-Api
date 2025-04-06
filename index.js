@@ -130,7 +130,7 @@ const sendVerificationEmail = async (email, userId) => {
     throw new Error('Token not saved in Firestore');
   }
 
-  const verificationLink = `${process.env.FRONTEND_URL}/recover-account?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
+  const verificationLink = `${process.env.FRONTEND_URL}//verify-email?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
 
   await transporter.sendMail({
     from: `"SureTalk" <${process.env.EMAIL_USER}>`,
