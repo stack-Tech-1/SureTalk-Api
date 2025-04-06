@@ -117,7 +117,8 @@ const sendVerificationEmail = async (email, userId) => {
     createdAt: FieldValue.serverTimestamp()
   });
 
-  const verificationLink = `${process.env.FRONTEND_URL}/verify-email?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
+  // Point directly to API endpoint
+  const verificationLink = `https://suretalk-api.onrender.com/api/verify-email?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
 
   await transporter.sendMail({
     from: `"SureTalk" <${process.env.EMAIL_USER}>`,
@@ -128,36 +129,6 @@ const sendVerificationEmail = async (email, userId) => {
       <a href="${verificationLink}">Click here to verify your email</a>
       <p>This link expires in 24 hours.</p>
       <p>If you didn't create this account, please ignore this email.</p>
-    `
-  });
-};
-
-// ==================== Account Recovery Functions ====================
-const sendRecoveryEmail = async (email, userId) => {
-  const token = generateToken();
-  const expiresAt = new Date();
-  expiresAt.setHours(expiresAt.getHours() + 1);
-
-  await db.collection('recovery-tokens').doc(token).set({
-    email,
-    userId,
-    expiresAt,
-    used: false,
-    type: 'account-recovery',
-    createdAt: FieldValue.serverTimestamp()
-  });
-
-  const recoveryLink = `${process.env.FRONTEND_URL}/recover-account?token=${token}`;
-
-  await transporter.sendMail({
-    from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
-    to: email,
-    subject: 'Account Recovery Request',
-    html: `
-      <p>We received a request to recover your account.</p>
-      <a href="${recoveryLink}">Click here to recover your account</a>
-      <p>This link expires in 1 hour.</p>
-      <p>If you didn't request this, please ignore this email.</p>
     `
   });
 };
@@ -251,7 +222,6 @@ app.post('/api/signup', limiter, async (req, res) => {
 });
 
 // Email Verification Route
-// ==================== Email Verification Route ====================
 app.get('/api/verify-email', async (req, res) => {
   const { token, email, userId } = req.query;
   
@@ -298,7 +268,7 @@ app.get('/api/verify-email', async (req, res) => {
 
     logger.info('Email verification successful', { userId, email });
 
-    // 5. Send success response
+    // 5. Send success response with redirect
     res.setHeader('Content-Type', 'text/html');
     res.setHeader('Cache-Control', 'no-store');
     res.send(`
@@ -350,7 +320,6 @@ app.get('/api/verify-email', async (req, res) => {
     return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=server_error`);
   }
 });
-
 
 // ==================== Google Auth Endpoint ====================
 app.post('/api/google-auth', async (req, res) => {
@@ -443,49 +412,3 @@ app.listen(PORT, () => {
     allowedOrigins
   });
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
