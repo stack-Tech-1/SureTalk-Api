@@ -105,43 +105,50 @@ const generateUserId = () => {
 const sendVerificationEmail = async (email, userId) => {
   const token = crypto.randomBytes(32).toString('hex');
   
+  // 1. Create proper Firestore timestamp
   const expiresAt = new Date();
-  expiresAt.setHours(expiresAt.getHours() + 24); // 24 hours from now
+  expiresAt.setHours(expiresAt.getHours() + 24);
 
-  logger.debug('Generated token', { 
-    token, 
-    email, 
-    userId,
-    expiresAt,
-    serverTime: new Date(),
-    firestoreServerTime: FieldValue.serverTimestamp()
-  });
+  try {
+    // 2. Save to Firestore FIRST
+    await db.collection('verification-tokens').doc(token).set({
+      email,
+      userId,
+      expiresAt: admin.firestore.Timestamp.fromDate(expiresAt), // Convert to Firestore timestamp
+      used: false,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
 
-  await db.collection('verification-tokens').doc(token).set({
-    email,
-    userId,
-    expiresAt,
-    used: false,
-    createdAt: FieldValue.serverTimestamp()
-  });
+    // 3. Verify it saved (with 3-second timeout)
+    const doc = await db.collection('verification-tokens').doc(token).get({ timeout: 3000 });
+    if (!doc.exists) {
+      throw new Error('Token not saved in Firestore');
+    }
 
-  const doc = await db.collection('verification-tokens').doc(token).get();
-  if (!doc.exists) {
-    throw new Error('Token not saved in Firestore');
+    // 4. THEN send email
+    const verificationLink = `${process.env.FRONTEND_URL}/verify-email?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
+    
+    await transporter.sendMail({
+      from: `"SureTalk" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Verify Your Email Address',
+      html: `
+        <p>Please click the link below to verify your email:</p>
+        <a href="${verificationLink}">Verify Email</a>
+        <p>Link expires in 24 hours.</p>
+      `
+    });
+
+    logger.info('Verification email sent successfully', { userId, email });
+
+  } catch (error) {
+    logger.error('Failed to send verification email', { 
+      error: error.message,
+      userId,
+      email
+    });
+    throw error; // Rethrow to handle in calling function
   }
-
-  const verificationLink = `${process.env.FRONTEND_URL}/recover-account?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
-
-  await transporter.sendMail({
-    from: `"SureTalk" <${process.env.EMAIL_USER}>`,
-    to: email,
-    subject: 'Verify Your Email Address',
-    html: `
-      <p>Please click the link below to verify your email:</p>
-      <a href="${verificationLink}">Verify Email</a>
-      <p>Link expires in 24 hours.</p>
-    `
-  });
 };
 
 function generateAuthToken(userId) {
