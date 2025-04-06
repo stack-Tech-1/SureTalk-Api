@@ -350,20 +350,25 @@ app.get('/api/verify-email', async (req, res) => {
           </a>
         </div>
 
-        <script>
-          // Animated countdown
-          let seconds = 10;
-          const countdownElement = document.getElementById('countdown');
-          
-          const interval = setInterval(() => {
-            seconds--;
-            countdownElement.textContent = seconds;
+         <script>
+          // Simple, reliable countdown implementation
+          document.addEventListener('DOMContentLoaded', function() {
+            var countdownElement = document.getElementById('countdown');
+            var seconds = 10;
             
-            if (seconds <= 0) {
-              clearInterval(interval);
-              window.location.href = 'https://buy.stripe.com/bIY1806DG7qw6uk144';
+            function updateCountdown() {
+              countdownElement.textContent = seconds;
+              seconds--;
+              
+              if (seconds < 0) {
+                window.location.href = 'https://buy.stripe.com/bIY1806DG7qw6uk144';
+              } else {
+                setTimeout(updateCountdown, 1000);
+              }
             }
-          }, 1000);
+            
+            updateCountdown();
+          });
         </script>
       </body>
       </html>
