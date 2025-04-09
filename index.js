@@ -898,48 +898,67 @@ app.post('/update-credentials', async (req, res) => {
 });
 
 // Save User PIN and Verify
-app.post('/save-pin', async (req, res) => {
-  const { userId, userPin } = req.body;
-
-  if (!userId || !userPin) {
-    return res.status(400).json({ 
-      status: 'error', 
-      message: 'userId and userPin are required' 
-    });
-  }
-
+app.post('/api/save-pin', limiter, async (req, res) => {
   try {
+    const { userId, userPin } = req.body;
+
+    // Validation
+    if (!userId || !userPin) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: { requires: ['userId', 'userPin'] }
+      });
+    }
+
+    // Check if user exists
     const userRef = db.collection('users').doc(userId);
     const userDoc = await userRef.get();
 
     if (userDoc.exists) {
-      return res.status(409).json({
-        status: 'error',
-        message: 'User ID already exists. Choose a different ID.',
-        userId: userId
+      logger.warn('Duplicate user ID attempt', { userId });
+      return res.status(409).json({ 
+        error: 'User ID already exists',
+        suggestion: 'Choose a different user ID or login instead'
       });
     }
 
-    const hashedPin = await bcrypt.hash(userPin, 12);
+    // Hash the PIN
+    const hashedPin = await bcrypt.hash(
+      userPin, 
+      parseInt(process.env.BCRYPT_SALT_ROUNDS || 12)
+    );
 
+    // Create user document
     await userRef.set({
+      userId,
       userPin: hashedPin,
       verified: true,
-      createdAt: FieldValue.serverTimestamp()
+      status: 'active',
+      emailVerified: false, 
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
     });
 
-    return res.json({ 
-      status: 'success', 
-      message: 'User PIN saved and verified successfully',
-      userId: userId
+    logger.info('New user PIN created', { userId });
+
+    // Generate auth token for immediate login
+    const token = generateAuthToken(userId);
+
+    return res.status(201).json({ 
+      success: true,
+      message: 'User credentials saved successfully',
+      userId,
+      token // Include auth token in response
     });
 
   } catch (error) {
-    console.error('Error saving PIN:', error);
+    logger.error('Failed to save user PIN', { 
+      error: error.message,
+      stack: error.stack
+    });
     return res.status(500).json({ 
-      status: 'error', 
-      message: 'Failed to save PIN', 
-      error: error.message 
+      error: 'Failed to save credentials',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
