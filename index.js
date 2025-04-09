@@ -615,66 +615,92 @@ app.post('/api/complete-recovery', limiter, async (req, res) => {
 // ==================== Slot Management Routes ====================
 
 // Verify User PIN
-app.get('/verify-user', async (req, res) => {
-  if (req.method !== 'GET') {
-    return res.status(400).json({ status: 'error', message: 'Invalid request method' });
-  }
+app.get('/api/verify-user', limiter, async (req, res) => {
+  const { UserId: userId, UserPin: userPin } = req.query;
 
-  const userId = req.query.UserId;
-  const userPin = req.query.UserPin;
-
+  // Input validation
   if (!userId || !userPin) {
-    return res.status(400).json({ status: 'error', message: 'User ID and PIN required' });
+    return res.status(400).json({ 
+      error: 'Missing credentials',
+      details: 'Both UserId and UserPin are required'
+    });
   }
 
   try {
     const userDoc = await db.collection('users').doc(userId).get();
 
+    // User existence check
     if (!userDoc.exists) {
-      return res.status(404).json({ status: 'error', message: 'User not found' });
+      logger.warn('User not found during verification', { userId });
+      return res.status(404).json({ 
+        error: 'User not found',
+        suggestion: 'Please check your UserId or register first'
+      });
     }
 
     const userData = userDoc.data();
 
-    // 1. First check temporary PIN if it exists
+    // Verification status check
+    if (userData.verified !== true) {
+      logger.warn('Unverified user attempt', { userId, status: userData.verified });
+      return res.status(403).json({
+        error: 'Account not verified',
+        details: 'Please complete your account verification first',
+        requiresVerification: true
+      });
+    }
+
+    // Check temporary PIN (if exists and not expired)
     if (userData.tempPin) {
       const isTempPinValid = await bcrypt.compare(userPin, userData.tempPin);
       const now = new Date();
-      const expiry = userData.tempPinExpiry.toDate();
+      const expiry = userData.tempPinExpiry?.toDate?.() || new Date(0);
 
       if (isTempPinValid && now < expiry) {
+        logger.info('Temporary PIN verification successful', { userId });
         return res.json({ 
-          status: 'success', 
-          message: 'User verified (temporary PIN)',
-          requiresPinReset: true
+          success: true,
+          message: 'Temporary PIN accepted',
+          verified: true,
+          requiresPinReset: true,
+          temporaryAccess: true
         });
       }
     }
 
-    // 2. Check original PIN
+    // Check permanent PIN
     if (userData.userPin) {
-      const isOriginalPinValid = await bcrypt.compare(userPin, userData.userPin);
-      if (isOriginalPinValid) {
+      const isPinValid = await bcrypt.compare(userPin, userData.userPin);
+      if (isPinValid) {
+        logger.info('User PIN verification successful', { userId });
         return res.json({ 
-          status: 'success', 
-          message: 'User verified',
-          requiresPinReset: false 
+          success: true,
+          message: 'PIN verification successful',
+          verified: true,
+          requiresPinReset: false,
+          userId,
+          firstName: userData.firstName || null
         });
       }
     }
 
-    // 3. If neither PIN matched
+    // Failed attempts logging
+    logger.warn('Invalid PIN attempt', { userId });
     return res.status(401).json({ 
-      status: 'error', 
-      message: 'Invalid PIN' 
+      error: 'Invalid credentials',
+      details: 'The UserId or PIN you entered is incorrect',
+      remainingAttempts: 3 // You might want to implement actual attempt tracking
     });
 
   } catch (error) {
-    console.error('Verification error:', error);
+    logger.error('Verification failed', { 
+      error: error.message,
+      stack: error.stack,
+      userId
+    });
     return res.status(500).json({ 
-      status: 'error', 
-      message: 'Verification failed', 
-      error: error.message 
+      error: 'Verification service unavailable',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
