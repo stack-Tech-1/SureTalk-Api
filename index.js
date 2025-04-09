@@ -612,6 +612,343 @@ app.post('/api/complete-recovery', limiter, async (req, res) => {
   }
 });
 
+// ==================== Slot Management Routes ====================
+
+// Verify User PIN
+app.get('/verify-user', async (req, res) => {
+  if (req.method !== 'GET') {
+    return res.status(400).json({ status: 'error', message: 'Invalid request method' });
+  }
+
+  const userId = req.query.UserId;
+  const userPin = req.query.UserPin;
+
+  if (!userId || !userPin) {
+    return res.status(400).json({ status: 'error', message: 'User ID and PIN required' });
+  }
+
+  try {
+    const userDoc = await db.collection('users').doc(userId).get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({ status: 'error', message: 'User not found' });
+    }
+
+    const userData = userDoc.data();
+
+    // 1. First check temporary PIN if it exists
+    if (userData.tempPin) {
+      const isTempPinValid = await bcrypt.compare(userPin, userData.tempPin);
+      const now = new Date();
+      const expiry = userData.tempPinExpiry.toDate();
+
+      if (isTempPinValid && now < expiry) {
+        return res.json({ 
+          status: 'success', 
+          message: 'User verified (temporary PIN)',
+          requiresPinReset: true
+        });
+      }
+    }
+
+    // 2. Check original PIN
+    if (userData.userPin) {
+      const isOriginalPinValid = await bcrypt.compare(userPin, userData.userPin);
+      if (isOriginalPinValid) {
+        return res.json({ 
+          status: 'success', 
+          message: 'User verified',
+          requiresPinReset: false 
+        });
+      }
+    }
+
+    // 3. If neither PIN matched
+    return res.status(401).json({ 
+      status: 'error', 
+      message: 'Invalid PIN' 
+    });
+
+  } catch (error) {
+    console.error('Verification error:', error);
+    return res.status(500).json({ 
+      status: 'error', 
+      message: 'Verification failed', 
+      error: error.message 
+    });
+  }
+});
+
+// Check Slot Availability
+app.get('/check-slot', async (req, res) => {
+  const { userId, slotNumber } = req.query;
+
+  if (!userId || !slotNumber) {
+    return res.status(400).json({ error: 'Missing userId or slotNumber' });
+  }
+
+  try {
+    const userDoc = await db.collection('users').doc(userId).get();
+
+    if (!userDoc.exists) {
+      return res.status(200).json({ available: true });
+    }
+
+    const slots = userDoc.data().slots || [];
+    const slotExists = slots.some(slot => slot.slotNumber == slotNumber);
+
+    if (slotExists) {
+      return res.status(400).json({ error: 'Slot already taken' });
+    }
+
+    return res.status(200).json({ available: true });
+  } catch (error) {
+    console.error('Error checking slot:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Save Slot Data
+app.post('/save-slot', async (req, res) => {
+  const { userId, slotNumber, contact, voiceMessage } = req.body;
+
+  if (!userId || !slotNumber || !contact || !voiceMessage) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+
+    let slots = [];
+    if (userDoc.exists) {
+      slots = userDoc.data().slots || [];
+    }
+
+    if (slots.some(slot => slot.slotNumber == slotNumber)) {
+      return res.status(400).json({ error: 'Slot already taken' });
+    }
+
+    slots.push({ slotNumber, contact, voiceMessage });
+
+    await userRef.set({ slots }, { merge: true });
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Error saving slot:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get Slot Data
+app.get('/get-slot', async (req, res) => {
+  const userId = req.query.UserId;
+  const slotNumber = req.query.SlotNumber;
+
+  if (!userId || !slotNumber) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const slots = userDoc.data().slots || [];
+    const selectedSlot = slots.find(slot => slot.slotNumber == slotNumber);
+
+    if (!selectedSlot) {
+      return res.status(404).json({ error: 'Slot not found' });
+    }
+
+    return res.json({ 
+      slotNumber: selectedSlot.slotNumber,
+      contact: selectedSlot.contact,
+      voiceMessage: selectedSlot.voiceMessage || null
+    });
+  } catch (error) {
+    console.error('Error fetching slot data:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Delete Slot Data
+app.post('/delete-slot', async (req, res) => {
+  const { userId, slotNumber } = req.body;
+
+  if (!userId || !slotNumber) {
+    return res.status(400).json({ error: 'Missing userId or slotNumber' });
+  }
+
+  try {
+    const normalizedUserId = userId.toString().trim();
+    const normalizedSlotNumber = slotNumber.toString().trim();
+
+    const userRef = db.collection('users').doc(normalizedUserId);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const userData = userDoc.data();
+    let slots = userData.slots || [];
+    const initialLength = slots.length;
+    
+    const updatedSlots = slots.filter(slot => 
+      slot.slotNumber.toString().trim() !== normalizedSlotNumber
+    );
+
+    if (updatedSlots.length === initialLength) {
+      return res.status(404).json({ 
+        error: 'Slot not found',
+        details: {
+          userId: normalizedUserId,
+          slotNumber: normalizedSlotNumber,
+          availableSlots: slots.map(s => s.slotNumber)
+        }
+      });
+    }
+
+    await userRef.update({ slots: updatedSlots });
+
+    return res.json({ 
+      success: true, 
+      message: 'Slot deleted successfully',
+      deletedSlot: normalizedSlotNumber,
+      remainingSlots: updatedSlots.length
+    });
+
+  } catch (error) {
+    console.error('Error deleting slot:', error);
+    return res.status(500).json({ 
+      error: 'Internal server error',
+      details: error.message 
+    });
+  }
+});
+
+// Update User Credentials
+app.post('/update-credentials', async (req, res) => {
+  const { oldUserId, newUserId, newPin } = req.body;
+
+  if (!oldUserId || (!newUserId && !newPin)) {
+    return res.status(400).json({
+      error: 'Missing fields. Provide oldUserId + newUserId or newPin.',
+    });
+  }
+
+  try {
+    const oldUserRef = db.collection('users').doc(oldUserId);
+    const oldUserDoc = await oldUserRef.get();
+
+    if (!oldUserDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const userData = oldUserDoc.data();
+    const updates = {};
+    
+    if (newPin) {
+      updates.userPin = await bcrypt.hash(newPin, 12);
+      updates.requiresPinReset = false;
+    }
+
+    if (!newUserId) {
+      await oldUserRef.update(updates);
+      await oldUserRef.update({
+        tempPin: FieldValue.delete(),
+        tempPinExpiry: FieldValue.delete(),
+      });
+      return res.json({ success: true, message: 'PIN updated successfully' });
+    }
+
+    updates.userId = newUserId;
+
+    const newUserRef = db.collection('users').doc(newUserId);
+    await newUserRef.set({
+      ...userData,
+      ...updates,
+    });
+
+    await oldUserRef.delete();
+
+    if (newPin) {
+      await newUserRef.update({
+        tempPin: FieldValue.delete(),
+        tempPinExpiry: FieldValue.delete(),
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'User credentials updated successfully',
+    });
+
+  } catch (error) {
+    console.error('Error updating user:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error.message,
+    });
+  }
+});
+
+// Save User PIN and Verify
+app.post('/save-pin', async (req, res) => {
+  const { userId, userPin } = req.body;
+
+  if (!userId || !userPin) {
+    return res.status(400).json({ 
+      status: 'error', 
+      message: 'userId and userPin are required' 
+    });
+  }
+
+  try {
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+
+    if (userDoc.exists) {
+      return res.status(409).json({
+        status: 'error',
+        message: 'User ID already exists. Choose a different ID.',
+        userId: userId
+      });
+    }
+
+    const hashedPin = await bcrypt.hash(userPin, 12);
+
+    await userRef.set({
+      userPin: hashedPin,
+      verified: true,
+      createdAt: FieldValue.serverTimestamp()
+    });
+
+    return res.json({ 
+      status: 'success', 
+      message: 'User PIN saved and verified successfully',
+      userId: userId
+    });
+
+  } catch (error) {
+    console.error('Error saving PIN:', error);
+    return res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to save PIN', 
+      error: error.message 
+    });
+  }
+});
+
+
+
+
+
+
 // ==================== Server Startup ====================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
