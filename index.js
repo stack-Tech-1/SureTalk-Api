@@ -12,6 +12,7 @@ const winston = require('winston');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // ==================== Initialize Express ====================
 const app = express();
@@ -992,6 +993,119 @@ app.post('/api/save-pin', limiter, async (req, res) => {
 
 
 
+// stripe Notification
+app.post('/api/stripe-webhook', express.raw({type: 'application/json'}), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+
+  try {
+    // Verify webhook signature
+    const event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+
+    logger.info('Stripe webhook received', { type: event.type });
+
+    // Handle subscription events
+    switch (event.type) {
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+      case 'customer.subscription.deleted':
+        await handleSubscriptionChange(event.data.object);
+        break;
+      case 'invoice.paid':
+        await handleInvoicePaid(event.data.object);
+        break;
+      case 'invoice.payment_failed':
+        await handlePaymentFailed(event.data.object);
+        break;
+      default:
+        logger.info(`Unhandled Stripe event type: ${event.type}`);
+    }
+
+    res.status(200).json({ received: true });
+  } catch (err) {
+    logger.error('Stripe webhook error', { error: err.message });
+    res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+});
+
+// Helper functions 
+async function handleSubscriptionChange(subscription) {
+  const userId = subscription.metadata.userId;
+  if (!userId) {
+    logger.warn('Subscription change missing userId', { subscriptionId: subscription.id });
+    return;
+  }
+
+  try {
+    const userRef = db.collection('users').doc(userId);
+    await userRef.update({
+      stripeSubscriptionId: subscription.id,
+      subscriptionStatus: subscription.status,
+      plan: subscription.items.data[0].plan.nickname,
+      currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+      updatedAt: FieldValue.serverTimestamp()
+    });
+    logger.info('Subscription updated', { userId, status: subscription.status });
+  } catch (error) {
+    logger.error('Failed to update subscription', { userId, error: error.message });
+  }
+}
+
+async function handleInvoicePaid(invoice) {
+  const userId = invoice.metadata.userId;
+  if (!userId) return;
+
+  try {
+    const userRef = db.collection('users').doc(userId);
+    await userRef.update({
+      lastPaymentDate: new Date(),
+      lastPaymentAmount: invoice.amount_paid / 100, // Convert to dollars
+      lastPaymentFailed: false,
+      updatedAt: FieldValue.serverTimestamp()
+    });
+    logger.info('Payment recorded', { userId, amount: invoice.amount_paid });
+  } catch (error) {
+    logger.error('Failed to record payment', { userId, error: error.message });
+  }
+}
+
+async function handlePaymentFailed(invoice) {
+  const userId = invoice.metadata.userId;
+  if (!userId) return;
+
+  try {
+    const userRef = db.collection('users').doc(userId);
+    await userRef.update({
+      lastPaymentFailed: true,
+      paymentFailureDate: new Date(),
+      updatedAt: FieldValue.serverTimestamp()
+    });
+    
+    logger.warn('Payment failed', { userId });
+    
+    // Optionally send email notification
+    const userDoc = await userRef.get();
+    const user = userDoc.data();
+    
+    if (user.email) {
+      await transporter.sendMail({
+        from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
+        to: user.email,
+        subject: 'Payment Failed',
+        html: `
+          <p>We were unable to process your payment for SureTalk.</p>
+          <p>Please update your payment method to avoid service interruption.</p>
+          <a href="${process.env.FRONTEND_URL}/billing">Update Payment Method</a>
+        `
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to handle payment failure', { userId, error: error.message });
+  }
+}
 
 
 // ==================== Server Startup ====================
