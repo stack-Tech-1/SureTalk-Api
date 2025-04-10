@@ -21,7 +21,7 @@ const app = express();
 // ==================== Create Webhook Router ====================
 const webhookRouter = express.Router();
 
-// ==================== Stripe Webhook Handler ====================
+// Stripe Webhook Handler - must use raw body
 webhookRouter.post('/api/stripe-webhook', 
   express.raw({type: 'application/json'}), // This must come first
   async (req, res) => {
@@ -40,9 +40,8 @@ webhookRouter.post('/api/stripe-webhook',
 
     let event;
     try {
-      // Verify using the raw body (req.body is already raw)
       event = stripe.webhooks.constructEvent(
-        req.body.toString('utf8'), // Convert buffer to string
+        req.body, // Use raw body directly
         sig,
         webhookSecret
       );
@@ -57,48 +56,21 @@ webhookRouter.post('/api/stripe-webhook',
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Process the event
-    try {
-      switch (event.type) {
-        case 'customer.subscription.created':
-        case 'customer.subscription.updated':
-        case 'customer.subscription.deleted':
-          await handleSubscriptionChange(event.data.object);
-          break;
-          
-        case 'invoice.paid':
-          await handleInvoicePaid(event.data.object);
-          break;
-          
-        case 'invoice.payment_failed':
-          await handlePaymentFailed(event.data.object);
-          break;
-          
-        default:
-          logger.debug(`Unhandled event type: ${event.type}`);
-      }
-
-      res.status(200).json({ received: true });
-      
-    } catch (error) {
-      logger.error('Failed to process Stripe event', {
-        eventType: event.type,
-        error: error.message,
-        stack: error.stack
-      });
-      res.status(500).json({ error: 'Internal processing error' });
-    }
+    // Process the event...
   }
 );
 
 // Mount the webhook router BEFORE any other middleware
 app.use(webhookRouter);
 
+// ==================== Other Middlewares ====================
+app.use(helmet());
+app.set('trust proxy', 1);
 
-
-
-
-
+// Then add your other middlewares (cors, json, etc.)
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+app.use(express.json()); // This comes AFTER the webhook router
 
 
 
