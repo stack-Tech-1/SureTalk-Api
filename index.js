@@ -47,33 +47,12 @@ const limiter = rateLimit({
 });
 
 
-
-// ✅ Apply raw parser ONLY for Stripe webhook route
-app.use('/api/stripe-hook', express.raw({ type: 'application/json' }));
-
-// ✅ THEN apply JSON body parser and other middleware
-app.use(express.json());
-app.use(cors());
-app.use(helmet());
-app.set('trust proxy', 1);
-
-
-
-
-// ==================== Stripe Webhook Handler ====================
-app.post('/api/stripe-hook', 
-   (req, res, next) => {
-    req.logger = logger.child({ endpoint: 'stripe-webhook' });
-    next();
-  },
+app.post('/api/stripe-webhook', 
+  express.raw({ type: 'application/json' }),
   async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-    console.log('[DEBUG] Using Webhook Secret:', webhookSecret);
-
-
-    // Validate required configuration
     if (!sig) {
       logger.error('Missing Stripe-Signature header');
       return res.status(400).json({ error: 'Missing signature header' });
@@ -86,28 +65,16 @@ app.post('/api/stripe-hook',
 
     let event;
     try {
-      //console.log('[Stripe Hook] Is Buffer:', Buffer.isBuffer(req.body));
-      //console.log('[Stripe Hook] Raw Body Type:', typeof req.body);
-      // Verify webhook signature with RAW body
+      console.log('[Stripe Hook] Is Buffer:', Buffer.isBuffer(req.body));
+      console.log('[Stripe Hook] Raw Body Type:', typeof req.body);
       event = stripe.webhooks.constructEvent(
         req.body, // Raw body buffer
         sig,
         webhookSecret
       );
-      
-      logger.info(`Stripe webhook received: ${event.type}`, {
-        eventId: event.id,
-        livemode: event.livemode
-      });
-
+      logger.info(`Stripe webhook received: ${event.type}`);
     } catch (err) {
-      logger.error('Stripe webhook verification failed', {
-        error: err.message,
-        headers: {
-          'stripe-signature': sig,
-          'user-agent': req.headers['user-agent']
-        }
-      });
+      logger.error('Stripe webhook verification failed', { error: err.message });
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
@@ -119,35 +86,29 @@ app.post('/api/stripe-hook',
         case 'customer.subscription.deleted':
           await handleSubscriptionChange(event.data.object);
           break;
-          
         case 'invoice.paid':
           await handleInvoicePaid(event.data.object);
           break;
-          
         case 'invoice.payment_failed':
           await handlePaymentFailed(event.data.object);
           break;
-          
         default:
           logger.debug(`Unhandled event type: ${event.type}`);
       }
-
       res.status(200).json({ received: true });
-
-      //console.log('[Stripe Hook] Headers:', req.headers);
-      //console.log('[Stripe Hook] Raw body type:', typeof req.body);
-
-      
     } catch (error) {
-      logger.error('Failed to process Stripe event', {
-        eventType: event.type,
-        error: error.message,
-        stack: error.stack
-      });
+      logger.error('Failed to process Stripe event', { error: error.message });
       res.status(500).json({ error: 'Internal processing error' });
     }
   }
 );
+
+
+
+      
+
+      //console.log('[Stripe Hook] Headers:', req.headers);
+      //console.log('[Stripe Hook] Raw body type:', typeof req.body);
 
 // ==================== Helper Functions ====================
 
