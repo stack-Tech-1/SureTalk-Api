@@ -57,7 +57,7 @@ app.use(cors());
 app.use(helmet());
 app.set('trust proxy', 1);
 
-constructEvent
+
 
 
 // ==================== Stripe Webhook Handler ====================
