@@ -993,117 +993,236 @@ app.post('/api/save-pin', limiter, async (req, res) => {
 
 
 
-// stripe Notification
-app.post('/api/stripe-webhook', express.raw({type: 'application/json'}), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
+// ==================== Stripe Webhook Handler ====================
+// NOTE: This route MUST be defined BEFORE express.json() middleware
 
-  try {
-    // Verify webhook signature
-    const event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
+app.post('/api/stripe-webhook', 
+  express.raw({type: 'application/json'}), // Critical for signature verification
+  async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-    logger.info('Stripe webhook received', { type: event.type });
-
-    // Handle subscription events
-    switch (event.type) {
-      case 'customer.subscription.created':
-      case 'customer.subscription.updated':
-      case 'customer.subscription.deleted':
-        await handleSubscriptionChange(event.data.object);
-        break;
-      case 'invoice.paid':
-        await handleInvoicePaid(event.data.object);
-        break;
-      case 'invoice.payment_failed':
-        await handlePaymentFailed(event.data.object);
-        break;
-      default:
-        logger.info(`Unhandled Stripe event type: ${event.type}`);
+    // 1. Validate required headers and configuration
+    if (!sig) {
+      logger.error('Missing Stripe-Signature header');
+      return res.status(400).json({ error: 'Missing signature header' });
+    }
+    
+    if (!webhookSecret) {
+      logger.error('Missing STRIPE_WEBHOOK_SECRET environment variable');
+      return res.status(500).json({ error: 'Server misconfigured' });
     }
 
-    res.status(200).json({ received: true });
-  } catch (err) {
-    logger.error('Stripe webhook error', { error: err.message });
-    res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-});
+    let event;
+    try {
+      // 2. Verify webhook signature
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+      logger.info(`Processing Stripe event: ${event.type}`, {
+        eventId: event.id,
+        livemode: event.livemode,
+        apiVersion: event.api_version
+      });
+    } catch (err) {
+      logger.error('Stripe webhook verification failed', {
+        error: err.message,
+        headers: {
+          'stripe-signature': sig,
+          'user-agent': req.headers['user-agent']
+        }
+      });
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
 
-// Helper functions 
+    // 3. Process the event
+    try {
+      switch (event.type) {
+        case 'customer.subscription.created':
+        case 'customer.subscription.updated':
+        case 'customer.subscription.deleted':
+          await handleSubscriptionChange(event.data.object);
+          break;
+          
+        case 'invoice.paid':
+          await handleInvoicePaid(event.data.object);
+          break;
+          
+        case 'invoice.payment_failed':
+          await handlePaymentFailed(event.data.object);
+          break;
+          
+        default:
+          logger.debug(`Unhandled Stripe event type: ${event.type}`);
+      }
+
+      // 4. Acknowledge receipt
+      res.status(200).json({ received: true });
+      
+    } catch (error) {
+      logger.error('Failed processing Stripe event', {
+        eventType: event.type,
+        error: error.message,
+        stack: error.stack
+      });
+      res.status(500).json({ error: 'Internal processing error' });
+    }
+  }
+);
+
+// ==================== Helper Functions ====================
+
 async function handleSubscriptionChange(subscription) {
-  const userId = subscription.metadata.userId;
+  // 1. Validate required metadata
+  const userId = subscription.metadata?.userId;
   if (!userId) {
-    logger.warn('Subscription change missing userId', { subscriptionId: subscription.id });
-    return;
+    logger.warn('Subscription missing userId metadata', {
+      subscriptionId: subscription.id,
+      metadata: subscription.metadata
+    });
+    throw new Error('userId missing in subscription metadata');
   }
 
+  // 2. Prepare update data
+  const subscriptionData = {
+    stripeSubscriptionId: subscription.id,
+    subscriptionStatus: subscription.status,
+    plan: subscription.items?.data[0]?.plan?.nickname || 'Unknown Plan',
+    currentPeriodEnd: subscription.current_period_end 
+      ? new Date(subscription.current_period_end * 1000)
+      : null,
+    updatedAt: FieldValue.serverTimestamp()
+  };
+
+  // 3. Update Firestore
   try {
-    const userRef = db.collection('users').doc(userId);
-    await userRef.update({
-      stripeSubscriptionId: subscription.id,
-      subscriptionStatus: subscription.status,
-      plan: subscription.items.data[0].plan.nickname,
-      currentPeriodEnd: new Date(subscription.current_period_end * 1000),
-      updatedAt: FieldValue.serverTimestamp()
+    await db.collection('users').doc(userId).update(subscriptionData);
+    logger.info('Subscription data updated', {
+      userId,
+      changes: Object.keys(subscriptionData)
     });
-    logger.info('Subscription updated', { userId, status: subscription.status });
   } catch (error) {
-    logger.error('Failed to update subscription', { userId, error: error.message });
+    logger.error('Failed to update subscription', {
+      userId,
+      error: error.message,
+      subscriptionId: subscription.id
+    });
+    throw error; // Will trigger Stripe retry
   }
 }
 
 async function handleInvoicePaid(invoice) {
-  const userId = invoice.metadata.userId;
-  if (!userId) return;
-
-  try {
-    const userRef = db.collection('users').doc(userId);
-    await userRef.update({
-      lastPaymentDate: new Date(),
-      lastPaymentAmount: invoice.amount_paid / 100, // Convert to dollars
-      lastPaymentFailed: false,
-      updatedAt: FieldValue.serverTimestamp()
+  // 1. Validate required metadata
+  const userId = invoice.metadata?.userId;
+  if (!userId) {
+    logger.warn('Paid invoice missing userId metadata', {
+      invoiceId: invoice.id,
+      customer: invoice.customer
     });
-    logger.info('Payment recorded', { userId, amount: invoice.amount_paid });
+    throw new Error('userId missing in invoice metadata');
+  }
+
+  // 2. Prepare payment data
+  const paymentData = {
+    lastPaymentDate: FieldValue.serverTimestamp(),
+    lastPaymentAmount: invoice.amount_paid / 100,
+    lastPaymentCurrency: invoice.currency.toUpperCase(),
+    lastPaymentStatus: 'paid',
+    lastPaymentInvoice: invoice.id,
+    updatedAt: FieldValue.serverTimestamp()
+  };
+
+  // 3. Update Firestore
+  try {
+    await db.collection('users').doc(userId).update(paymentData);
+    logger.info('Payment recorded successfully', {
+      userId,
+      amount: paymentData.lastPaymentAmount,
+      currency: paymentData.lastPaymentCurrency
+    });
   } catch (error) {
-    logger.error('Failed to record payment', { userId, error: error.message });
+    logger.error('Failed to record payment', {
+      userId,
+      error: error.message,
+      invoiceId: invoice.id
+    });
+    throw error;
   }
 }
 
 async function handlePaymentFailed(invoice) {
-  const userId = invoice.metadata.userId;
-  if (!userId) return;
+  // 1. Validate required metadata
+  const userId = invoice.metadata?.userId;
+  if (!userId) {
+    logger.error('Failed payment missing userId metadata', {
+      invoiceId: invoice.id,
+      customer: invoice.customer
+    });
+    throw new Error('userId missing in invoice metadata');
+  }
+
+  const userRef = db.collection('users').doc(userId);
+
+  // 2. Prepare failure data
+  const failureData = {
+    lastPaymentFailed: true,
+    paymentFailureDate: FieldValue.serverTimestamp(),
+    paymentFailureReason: invoice.attempt_count > 1 ? 'repeated_failure' : 'first_failure',
+    paymentFailureAmount: invoice.amount_due / 100,
+    nextPaymentAttempt: invoice.next_payment_attempt 
+      ? new Date(invoice.next_payment_attempt * 1000)
+      : null,
+    updatedAt: FieldValue.serverTimestamp()
+  };
 
   try {
-    const userRef = db.collection('users').doc(userId);
-    await userRef.update({
-      lastPaymentFailed: true,
-      paymentFailureDate: new Date(),
-      updatedAt: FieldValue.serverTimestamp()
+    // 3. Update Firestore
+    await userRef.update(failureData);
+    logger.warn('Payment failure recorded', {
+      userId,
+      attemptCount: invoice.attempt_count,
+      amountDue: failureData.paymentFailureAmount
     });
-    
-    logger.warn('Payment failed', { userId });
-    
-    // Optionally send email notification
-    const userDoc = await userRef.get();
-    const user = userDoc.data();
-    
-    if (user.email) {
-      await transporter.sendMail({
-        from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
-        to: user.email,
-        subject: 'Payment Failed',
-        html: `
-          <p>We were unable to process your payment for SureTalk.</p>
-          <p>Please update your payment method to avoid service interruption.</p>
-          <a href="${process.env.FRONTEND_URL}/billing">Update Payment Method</a>
-        `
-      });
+
+    // 4. Send notification email if enabled
+    if (process.env.SEND_PAYMENT_FAILURE_EMAILS === 'true') {
+      const user = (await userRef.get()).data();
+      
+      if (user?.email) {
+        const mailOptions = {
+          from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
+          to: user.email,
+          subject: `Payment Failed - Attempt ${invoice.attempt_count}`,
+          html: `
+            <h2>Payment Failed</h2>
+            <p>We couldn't process your payment of $${failureData.paymentFailureAmount.toFixed(2)}.</p>
+            ${failureData.nextPaymentAttempt ? `
+              <p>Next attempt: ${failureData.nextPaymentAttempt.toLocaleString()}</p>
+            ` : ''}
+            <a href="${process.env.FRONTEND_URL}/billing" style="
+              display: inline-block;
+              padding: 10px 20px;
+              background: #4CAF50;
+              color: white;
+              text-decoration: none;
+              border-radius: 5px;
+              margin-top: 15px;
+            ">Update Payment Method</a>
+            <p style="margin-top: 20px; color: #666;">
+              Please update your payment details to avoid service interruption.
+            </p>
+          `
+        };
+
+        await transporter.sendMail(mailOptions);
+        logger.info('Payment failure email sent', { userId });
+      }
     }
   } catch (error) {
-    logger.error('Failed to handle payment failure', { userId, error: error.message });
+    logger.error('Failed to handle payment failure', {
+      userId,
+      error: error.message,
+      stack: error.stack
+    });
+    throw error;
   }
 }
 
