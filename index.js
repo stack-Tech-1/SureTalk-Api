@@ -57,7 +57,7 @@ app.use(cors());
 app.use(helmet());
 app.set('trust proxy', 1);
 
-
+constructEvent
 
 
 // ==================== Stripe Webhook Handler ====================
@@ -83,6 +83,8 @@ app.post('/stripe-hook',
 
     let event;
     try {
+      console.log('[Stripe Hook] Is Buffer:', Buffer.isBuffer(req.body));
+      console.log('[Stripe Hook] Raw Body Type:', typeof req.body);
       // Verify webhook signature with RAW body
       event = stripe.webhooks.constructEvent(
         req.body, // Raw body buffer
