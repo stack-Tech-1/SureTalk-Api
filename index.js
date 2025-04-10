@@ -14,6 +14,9 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
+// ==================== Initialize Express ====================
+const app = express();
+
 
 
 
@@ -120,8 +123,21 @@ app.use(cors());
 
 
 
-// ==================== Initialize Express ====================
-const app = express();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 // ==================== Logger Configuration ====================
