@@ -128,6 +128,10 @@ app.post('/stripe-hook',
       }
 
       res.status(200).json({ received: true });
+
+      console.log('[Stripe Hook] Headers:', req.headers);
+      console.log('[Stripe Hook] Raw body type:', typeof req.body);
+
       
     } catch (error) {
       logger.error('Failed to process Stripe event', {
