@@ -18,6 +18,8 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const app = express();
 
 
+// ==================== Create Webhook Router ====================
+const webhookRouter = express.Router(); // Add this line before using webhookRouter
 
 
 
