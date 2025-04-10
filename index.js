@@ -21,20 +21,8 @@ const app = express();
 // ==================== Create Webhook Router ====================
 const webhookRouter = express.Router();
 
-// Stripe Webhook Handler - must use raw body
 webhookRouter.post('/api/stripe-webhook', 
-  // Middleware to get raw body
-  (req, res, next) => {
-    let data = '';
-    req.setEncoding('utf8');
-    req.on('data', (chunk) => {
-      data += chunk;
-    });
-    req.on('end', () => {
-      req.rawBody = data;
-      next();
-    });
-  },
+  rawBodyMiddleware,
   async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -52,7 +40,7 @@ webhookRouter.post('/api/stripe-webhook',
     let event;
     try {
       event = stripe.webhooks.constructEvent(
-        req.rawBody, // Use the raw body we stored
+        req.rawBody, 
         sig,
         webhookSecret
       );
@@ -66,7 +54,6 @@ webhookRouter.post('/api/stripe-webhook',
       });
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
-
 
     // Process the event
     try {
