@@ -257,8 +257,7 @@ async function handlePaymentFailed(invoice) {
 }
 
 
-// Mount the webhook router BEFORE any other middleware
-app.use(webhookRouter);
+
 
 
 
