@@ -48,16 +48,21 @@ const limiter = rateLimit({
 
 
 
+// ✅ Apply raw parser ONLY for Stripe webhook route
+app.use('/api/stripe-webhook', express.raw({ type: 'application/json' }));
 
-
+// ✅ THEN apply JSON body parser and other middleware
+app.use(express.json());
+app.use(cors());
+app.use(helmet());
+app.set('trust proxy', 1);
 
 
 
 
 // ==================== Stripe Webhook Handler ====================
 app.post('/api/stripe-webhook', 
-  express.raw({ type: 'application/json' }),
-  (req, res, next) => {
+   (req, res, next) => {
     req.logger = logger.child({ endpoint: 'stripe-webhook' });
     next();
   },
@@ -134,13 +139,6 @@ app.post('/api/stripe-webhook',
     }
   }
 );
-
-// ==================== Apply Middleware AFTER webhook ====================
-app.use(express.json()); // Must come after raw parser
-app.use(cors());
-app.use(helmet());
-
-
 
 // ==================== Helper Functions ====================
 
