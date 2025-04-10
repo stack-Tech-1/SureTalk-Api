@@ -70,6 +70,9 @@ app.post('/stripe-hook',
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
+    console.log('[DEBUG] Using Webhook Secret:', webhookSecret);
+
+
     // Validate required configuration
     if (!sig) {
       logger.error('Missing Stripe-Signature header');
