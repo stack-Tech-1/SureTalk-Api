@@ -86,8 +86,8 @@ app.post('/stripe-hook',
 
     let event;
     try {
-      console.log('[Stripe Hook] Is Buffer:', Buffer.isBuffer(req.body));
-      console.log('[Stripe Hook] Raw Body Type:', typeof req.body);
+      //console.log('[Stripe Hook] Is Buffer:', Buffer.isBuffer(req.body));
+      //console.log('[Stripe Hook] Raw Body Type:', typeof req.body);
       // Verify webhook signature with RAW body
       event = stripe.webhooks.constructEvent(
         req.body, // Raw body buffer
@@ -134,8 +134,8 @@ app.post('/stripe-hook',
 
       res.status(200).json({ received: true });
 
-      console.log('[Stripe Hook] Headers:', req.headers);
-      console.log('[Stripe Hook] Raw body type:', typeof req.body);
+      //console.log('[Stripe Hook] Headers:', req.headers);
+      //console.log('[Stripe Hook] Raw body type:', typeof req.body);
 
       
     } catch (error) {
