@@ -22,20 +22,12 @@ const app = express();
 
 
 // ==================== Stripe Webhook Handler ====================
-// MUST be placed BEFORE any other middleware
-
-// Create a separate router for webhooks to ensure proper middleware order
-const webhookRouter = express.Router();
-
 webhookRouter.post('/api/stripe-webhook', 
-  // Critical: raw body parser for webhooks
-  express.raw({type: 'application/json'}),
-  
+  express.raw({type: 'application/json'}), // This must come first
   async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-    // Validate required configuration
     if (!sig) {
       logger.error('Missing Stripe-Signature header');
       return res.status(400).json({ error: 'Missing signature header' });
@@ -48,26 +40,19 @@ webhookRouter.post('/api/stripe-webhook',
 
     let event;
     try {
-      // Verify webhook signature with RAW body
+      // Verify using the raw body (req.body is already raw)
       event = stripe.webhooks.constructEvent(
-        req.body, // Use raw body directly
+        req.body.toString('utf8'), // Convert buffer to string
         sig,
         webhookSecret
       );
       
-      logger.info(`Stripe webhook received: ${event.type}`, {
-        eventId: event.id,
-        livemode: event.livemode
-      });
-
+      logger.info(`Stripe webhook received: ${event.type}`);
     } catch (err) {
       logger.error('Stripe webhook verification failed', {
         error: err.message,
-        headers: {
-          'stripe-signature': sig,
-          'user-agent': req.headers['user-agent']
-        },
-        body: req.body.toString() // Log the raw body for debugging
+        headers: req.headers,
+        body: req.body.toString()
       });
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
