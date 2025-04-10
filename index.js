@@ -94,8 +94,7 @@ app.post('/api/stripe-webhook',
     }
   }
 );
-//for
-app.use(express.json());
+
 
 
 // ==================== Helper Functions ====================
@@ -260,6 +259,8 @@ async function handlePaymentFailed(invoice) {
 
 
 
+//for
+
 
 
 
@@ -329,9 +330,9 @@ const corsOptions = {
   credentials: true
 };
 
-app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json());
+
 
 // ==================== Email Configuration ====================
 const transporter = nodemailer.createTransport({
