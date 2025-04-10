@@ -17,6 +17,254 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 // ==================== Initialize Express ====================
 const app = express();
 
+
+// ==================== Stripe Webhook Handler ====================
+app.post('/api/stripe-webhook', 
+  // Critical: raw body parser for webhooks
+  express.raw({type: 'application/json'}),
+  
+  async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    // Validate required configuration
+    if (!sig) {
+      logger.error('Missing Stripe-Signature header');
+      return res.status(400).json({ error: 'Missing signature header' });
+    }
+    
+    if (!webhookSecret) {
+      logger.error('Missing STRIPE_WEBHOOK_SECRET');
+      return res.status(500).json({ error: 'Server misconfigured' });
+    }
+
+    let event;
+    try {
+      // Verify webhook signature with RAW body
+      event = stripe.webhooks.constructEvent(
+        req.body, // Raw body buffer
+        sig,
+        webhookSecret
+      );
+      
+      logger.info(`Stripe webhook received: ${event.type}`, {
+        eventId: event.id,
+        livemode: event.livemode
+      });
+
+    } catch (err) {
+      logger.error('Stripe webhook verification failed', {
+        error: err.message,
+        headers: {
+          'stripe-signature': sig,
+          'user-agent': req.headers['user-agent']
+        }
+      });
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Process the event
+    try {
+      switch (event.type) {
+        case 'customer.subscription.created':
+        case 'customer.subscription.updated':
+        case 'customer.subscription.deleted':
+          await handleSubscriptionChange(event.data.object);
+          break;
+          
+        case 'invoice.paid':
+          await handleInvoicePaid(event.data.object);
+          break;
+          
+        case 'invoice.payment_failed':
+          await handlePaymentFailed(event.data.object);
+          break;
+          
+        default:
+          logger.debug(`Unhandled event type: ${event.type}`);
+      }
+
+      res.status(200).json({ received: true });
+      
+    } catch (error) {
+      logger.error('Failed to process Stripe event', {
+        eventType: event.type,
+        error: error.message,
+        stack: error.stack
+      });
+      res.status(500).json({ error: 'Internal processing error' });
+    }
+  }
+);
+
+
+// ==================== Helper Functions ====================
+
+async function handleSubscriptionChange(subscription) {
+  // 1. Validate required metadata
+  const userId = subscription.metadata?.userId;
+  if (!userId) {
+    logger.warn('Subscription missing userId metadata', {
+      subscriptionId: subscription.id,
+      metadata: subscription.metadata
+    });
+    throw new Error('userId missing in subscription metadata');
+  }
+
+  // 2. Prepare update data
+  const subscriptionData = {
+    stripeSubscriptionId: subscription.id,
+    subscriptionStatus: subscription.status,
+    plan: subscription.items?.data[0]?.plan?.nickname || 'Unknown Plan',
+    currentPeriodEnd: subscription.current_period_end 
+      ? new Date(subscription.current_period_end * 1000)
+      : null,
+    updatedAt: FieldValue.serverTimestamp()
+  };
+
+  // 3. Update Firestore
+  try {
+    await db.collection('users').doc(userId).update(subscriptionData);
+    logger.info('Subscription data updated', {
+      userId,
+      changes: Object.keys(subscriptionData)
+    });
+  } catch (error) {
+    logger.error('Failed to update subscription', {
+      userId,
+      error: error.message,
+      subscriptionId: subscription.id
+    });
+    throw error; // Will trigger Stripe retry
+  }
+}
+
+async function handleInvoicePaid(invoice) {
+  // 1. Validate required metadata
+  const userId = invoice.metadata?.userId;
+  if (!userId) {
+    logger.warn('Paid invoice missing userId metadata', {
+      invoiceId: invoice.id,
+      customer: invoice.customer
+    });
+    throw new Error('userId missing in invoice metadata');
+  }
+
+  // 2. Prepare payment data
+  const paymentData = {
+    lastPaymentDate: FieldValue.serverTimestamp(),
+    lastPaymentAmount: invoice.amount_paid / 100,
+    lastPaymentCurrency: invoice.currency.toUpperCase(),
+    lastPaymentStatus: 'paid',
+    lastPaymentInvoice: invoice.id,
+    updatedAt: FieldValue.serverTimestamp()
+  };
+
+  // 3. Update Firestore
+  try {
+    await db.collection('users').doc(userId).update(paymentData);
+    logger.info('Payment recorded successfully', {
+      userId,
+      amount: paymentData.lastPaymentAmount,
+      currency: paymentData.lastPaymentCurrency
+    });
+  } catch (error) {
+    logger.error('Failed to record payment', {
+      userId,
+      error: error.message,
+      invoiceId: invoice.id
+    });
+    throw error;
+  }
+}
+
+async function handlePaymentFailed(invoice) {
+  // 1. Validate required metadata
+  const userId = invoice.metadata?.userId;
+  if (!userId) {
+    logger.error('Failed payment missing userId metadata', {
+      invoiceId: invoice.id,
+      customer: invoice.customer
+    });
+    throw new Error('userId missing in invoice metadata');
+  }
+
+  const userRef = db.collection('users').doc(userId);
+
+  // 2. Prepare failure data
+  const failureData = {
+    lastPaymentFailed: true,
+    paymentFailureDate: FieldValue.serverTimestamp(),
+    paymentFailureReason: invoice.attempt_count > 1 ? 'repeated_failure' : 'first_failure',
+    paymentFailureAmount: invoice.amount_due / 100,
+    nextPaymentAttempt: invoice.next_payment_attempt 
+      ? new Date(invoice.next_payment_attempt * 1000)
+      : null,
+    updatedAt: FieldValue.serverTimestamp()
+  };
+
+  try {
+    // 3. Update Firestore
+    await userRef.update(failureData);
+    logger.warn('Payment failure recorded', {
+      userId,
+      attemptCount: invoice.attempt_count,
+      amountDue: failureData.paymentFailureAmount
+    });
+
+    // 4. Send notification email if enabled
+    if (process.env.SEND_PAYMENT_FAILURE_EMAILS === 'true') {
+      const user = (await userRef.get()).data();
+      
+      if (user?.email) {
+        const mailOptions = {
+          from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
+          to: user.email,
+          subject: `Payment Failed - Attempt ${invoice.attempt_count}`,
+          html: `
+            <h2>Payment Failed</h2>
+            <p>We couldn't process your payment of $${failureData.paymentFailureAmount.toFixed(2)}.</p>
+            ${failureData.nextPaymentAttempt ? `
+              <p>Next attempt: ${failureData.nextPaymentAttempt.toLocaleString()}</p>
+            ` : ''}
+            <a href="${process.env.FRONTEND_URL}/billing" style="
+              display: inline-block;
+              padding: 10px 20px;
+              background: #4CAF50;
+              color: white;
+              text-decoration: none;
+              border-radius: 5px;
+              margin-top: 15px;
+            ">Update Payment Method</a>
+            <p style="margin-top: 20px; color: #666;">
+              Please update your payment details to avoid service interruption.
+            </p>
+          `
+        };
+
+        await transporter.sendMail(mailOptions);
+        logger.info('Payment failure email sent', { userId });
+      }
+    }
+  } catch (error) {
+    logger.error('Failed to handle payment failure', {
+      userId,
+      error: error.message,
+      stack: error.stack
+    });
+    throw error;
+  }
+}
+
+
+
+
+
+
+
+
+
+
 // ==================== Logger Configuration ====================
 const logger = winston.createLogger({
   level: 'info',
@@ -993,202 +1241,7 @@ app.post('/api/save-pin', limiter, async (req, res) => {
 
 
 
-// ==================== Stripe Webhook Handler ====================
-app.post('/api/stripe-webhook', 
-  // Critical: raw body parser for webhooks
-  express.raw({type: 'application/json'}),
-  
-  async (req, res) => {
-    const sig = req.headers['stripe-signature'];
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-    // Validate required configuration
-    if (!sig) {
-      logger.error('Missing Stripe-Signature header');
-      return res.status(400).json({ error: 'Missing signature header' });
-    }
-    
-    if (!webhookSecret) {
-      logger.error('Missing STRIPE_WEBHOOK_SECRET');
-      return res.status(500).json({ error: 'Server misconfigured' });
-    }
-
-    let event;
-    try {
-      // Verify webhook signature with RAW body
-      event = stripe.webhooks.constructEvent(
-        req.body, // Raw body buffer
-        sig,
-        webhookSecret
-      );
-      
-      logger.info(`Stripe webhook received: ${event.type}`, {
-        eventId: event.id,
-        livemode: event.livemode
-      });
-
-    } catch (err) {
-      logger.error('Stripe webhook verification failed', {
-        error: err.message,
-        headers: {
-          'stripe-signature': sig,
-          'user-agent': req.headers['user-agent']
-        }
-      });
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    // Process the event
-    try {
-      switch (event.type) {
-        case 'customer.subscription.created':
-        case 'customer.subscription.updated':
-        case 'customer.subscription.deleted':
-          await handleSubscriptionChange(event.data.object);
-          break;
-          
-        case 'invoice.paid':
-          await handleInvoicePaid(event.data.object);
-          break;
-          
-        case 'invoice.payment_failed':
-          await handlePaymentFailed(event.data.object);
-          break;
-          
-        default:
-          logger.debug(`Unhandled event type: ${event.type}`);
-      }
-
-      res.status(200).json({ received: true });
-      
-    } catch (error) {
-      logger.error('Failed to process Stripe event', {
-        eventType: event.type,
-        error: error.message,
-        stack: error.stack
-      });
-      res.status(500).json({ error: 'Internal processing error' });
-    }
-  }
-);
-
-
-// ==================== Helper Functions ====================
-
-// =============== SUBSCRIPTION HANDLER ===============
-async function handleSubscriptionChange(subscription) {
-  const userId = subscription.metadata?.userId;
-  if (!userId) {
-    logger.warn('Subscription missing userId metadata', {
-      subscriptionId: subscription.id
-    });
-    throw new Error('userId missing in subscription metadata');
-  }
-
-  try {
-    const updates = {
-      stripeSubscriptionId: subscription.id,
-      subscriptionStatus: subscription.status,
-      plan: subscription.items?.data[0]?.plan?.nickname || 'Unknown',
-      currentPeriodEnd: subscription.current_period_end 
-        ? new Date(subscription.current_period_end * 1000)
-        : null,
-      updatedAt: FieldValue.serverTimestamp()
-    };
-
-    await db.collection('users').doc(userId).update(updates);
-    logger.info('Subscription updated', { userId, updates });
-
-  } catch (error) {
-    logger.error('Failed to update subscription', {
-      userId,
-      error: error.message,
-      stack: error.stack
-    });
-    throw error;
-  }
-}
-
-// =============== PAYMENT SUCCESS HANDLER ===============
-async function handleInvoicePaid(invoice) {
-  const userId = invoice.metadata?.userId;
-  if (!userId) {
-    logger.warn('Paid invoice missing userId metadata', {
-      invoiceId: invoice.id
-    });
-    throw new Error('userId missing in invoice metadata');
-  }
-
-  try {
-    const updates = {
-      lastPaymentDate: FieldValue.serverTimestamp(),
-      lastPaymentAmount: invoice.amount_paid / 100,
-      lastPaymentStatus: 'paid',
-      lastPaymentFailed: false,
-      updatedAt: FieldValue.serverTimestamp()
-    };
-
-    await db.collection('users').doc(userId).update(updates);
-    logger.info('Payment recorded', { userId, amount: updates.lastPaymentAmount });
-
-  } catch (error) {
-    logger.error('Failed to record payment', {
-      userId,
-      error: error.message,
-      stack: error.stack
-    });
-    throw error;
-  }
-}
-
-// =============== PAYMENT FAILURE HANDLER ===============
-async function handlePaymentFailed(invoice) {
-  const userId = invoice.metadata?.userId;
-  if (!userId) {
-    logger.error('Failed payment missing userId metadata', {
-      invoiceId: invoice.id
-    });
-    throw new Error('userId missing in invoice metadata');
-  }
-
-  try {
-    const updates = {
-      lastPaymentFailed: true,
-      paymentFailureDate: FieldValue.serverTimestamp(),
-      paymentFailureReason: invoice.attempt_count > 1 ? 'repeated_failure' : 'first_failure',
-      updatedAt: FieldValue.serverTimestamp()
-    };
-
-    await db.collection('users').doc(userId).update(updates);
-    logger.warn('Payment failure recorded', { userId });
-
-    // Send email notification if enabled
-    if (process.env.SEND_PAYMENT_FAILURE_EMAILS === 'true') {
-      const user = (await db.collection('users').doc(userId).get()).data();
-      if (user?.email) {
-        await transporter.sendMail({
-          from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
-          to: user.email,
-          subject: 'Payment Failed - Action Required',
-          html: `
-            <p>We couldn't process your payment for SureTalk.</p>
-            <p>Please update your payment method:</p>
-            <a href="${process.env.FRONTEND_URL}/billing">Update Payment Method</a>
-          `
-        });
-        logger.info('Payment failure email sent', { userId });
-      }
-    }
-
-  } catch (error) {
-    logger.error('Failed to handle payment failure', {
-      userId,
-      error: error.message,
-      stack: error.stack
-    });
-    throw error;
-  }
-}
 
 
 // ==================== Server Startup ====================
