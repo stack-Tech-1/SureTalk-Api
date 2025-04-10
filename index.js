@@ -34,6 +34,22 @@ const logger = winston.createLogger({
 });
 
 
+// ==================== Security Middlewares ====================
+app.use(helmet());
+app.set('trust proxy', 1);
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many requests from this IP',
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+
+
+
+
 
 
 
@@ -297,17 +313,6 @@ async function handlePaymentFailed(invoice) {
 
 
 
-// ==================== Security Middlewares ====================
-app.use(helmet());
-app.set('trust proxy', 1);
-
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: 'Too many requests from this IP',
-  standardHeaders: true,
-  legacyHeaders: false
-});
 
 // ==================== CORS Configuration ====================
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
