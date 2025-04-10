@@ -135,6 +135,11 @@ app.post('/api/stripe-webhook',
   }
 );
 
+// ==================== Apply Middleware AFTER webhook ====================
+app.use(express.json()); // Must come after raw parser
+app.use(cors());
+app.use(helmet());
+
 
 
 // ==================== Helper Functions ====================
