@@ -18,9 +18,33 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const app = express();
 
 
+
+// ==================== Logger Configuration ====================
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'logs/combined.log' })
+  ]
+});
+
+
+
+
+
+
 // ==================== Stripe Webhook Handler ====================
 app.post('/api/stripe-webhook', 
   express.raw({ type: 'application/json' }),
+  (req, res, next) => {
+    req.logger = logger.child({ endpoint: 'stripe-webhook' });
+    next();
+  },
   async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -259,7 +283,6 @@ async function handlePaymentFailed(invoice) {
 
 
 
-//for
 
 
 
@@ -273,31 +296,6 @@ async function handlePaymentFailed(invoice) {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-// ==================== Logger Configuration ====================
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'logs/combined.log' })
-  ]
-});
 
 // ==================== Security Middlewares ====================
 app.use(helmet());
