@@ -19,9 +19,7 @@ const app = express();
 
 
 // ==================== Create Webhook Router ====================
-const webhookRouter = express.Router(); // Add this line before using webhookRouter
-
-
+const webhookRouter = express.Router();
 
 // ==================== Stripe Webhook Handler ====================
 webhookRouter.post('/api/stripe-webhook', 
@@ -95,12 +93,6 @@ webhookRouter.post('/api/stripe-webhook',
 
 // Mount the webhook router BEFORE any other middleware
 app.use(webhookRouter);
-
-// ========== REGULAR MIDDLEWARE ==========
-// These come AFTER the webhook handler
-app.use(express.json());
-app.use(cors());
-// ... rest of your middleware and routes ...
 
 
 
