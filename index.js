@@ -50,15 +50,15 @@ const limiter = rateLimit({
 app.post('/api/stripe-webhook', 
   express.raw({ type: 'application/json' }),
   async (req, res) => {
-    const sig = req.headers['stripe-signature'];
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const signature = req.headers['stripe-signature'];
+    const endpoint_secret = process.env.STRIPE_WEBHOOK_SECRET;
 
-    if (!sig) {
+    if (!signature) {
       logger.error('Missing Stripe-Signature header');
       return res.status(400).json({ error: 'Missing signature header' });
     }
     
-    if (!webhookSecret) {
+    if (!endpoint_secret) {
       logger.error('Missing STRIPE_WEBHOOK_SECRET');
       return res.status(500).json({ error: 'Server misconfigured' });
     }
@@ -69,8 +69,8 @@ app.post('/api/stripe-webhook',
       console.log('[Stripe Hook] Raw Body Type:', typeof req.body);
       event = stripe.webhooks.constructEvent(
         req.body, // Raw body buffer
-        sig,
-        webhookSecret
+        signature,
+        endpoint_secret
       );
       logger.info(`Stripe webhook received: ${event.type}`);
     } catch (err) {
