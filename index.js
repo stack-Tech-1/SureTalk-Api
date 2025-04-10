@@ -20,9 +20,7 @@ const app = express();
 
 // ==================== Stripe Webhook Handler ====================
 app.post('/api/stripe-webhook', 
-  // Critical: raw body parser for webhooks
-  express.raw({type: 'application/json'}),
-  
+  express.raw({ type: 'application/json' }),
   async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -96,6 +94,8 @@ app.post('/api/stripe-webhook',
     }
   }
 );
+
+app.use(express.json());
 
 
 // ==================== Helper Functions ====================
