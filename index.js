@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { db, FieldValue } = require('./firebase');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcryptjs'); 
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const dns = require('dns').promises;
@@ -47,6 +47,7 @@ const limiter = rateLimit({
 });
 
 
+// ==================== Stripe functions ====================
 app.post('/api/stripe-webhook', 
   express.raw({ type: 'application/json' }),
   async (req, res) => {
@@ -78,34 +79,31 @@ app.post('/api/stripe-webhook',
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Process the event
     try {
       switch (event.type) {
-        case 'customer.subscription.created':
-        case 'customer.subscription.updated':
+        case 'invoice.paid':
+          await handlePaymentSuccess(event.data.object);
+          break;
+          
+        case 'invoice.payment_failed':
+          await handlePaymentFailure(event.data.object);
+          break;
+          
         case 'customer.subscription.deleted':
+        case 'customer.subscription.updated':
           await handleSubscriptionChange(event.data.object);
           break;
-        case 'invoice.paid':
-          await handleInvoicePaid(event.data.object);
-          break;
-        case 'invoice.payment_failed':
-          await handlePaymentFailed(event.data.object);
-          break;
+          
         default:
           logger.debug(`Unhandled event type: ${event.type}`);
       }
       res.status(200).json({ received: true });
     } catch (error) {
-      logger.error('Failed to process Stripe event', { error: error.message });
-      res.status(500).json({ error: 'Internal processing error' });
+      logger.error('Webhook processing failed', { error: error.message });
+      res.status(500).json({ error: 'Processing failed' });
     }
   }
 );
-
-
-
-      
 
       //console.log('[Stripe Hook] Headers:', req.headers);
       //console.log('[Stripe Hook] Raw body type:', typeof req.body);
@@ -190,100 +188,102 @@ async function handleInvoicePaid(invoice) {
   }
 }
 
-async function handlePaymentFailed(invoice) {
-  // 1. Validate required metadata
-  const userId = invoice.metadata?.userId;
-  if (!userId) {
-    logger.error('Failed payment missing userId metadata', {
+
+async function handlePaymentSuccess(invoice) {
+  // 1. Get Stripe customer
+  const customer = await stripe.customers.retrieve(invoice.customer);
+  
+  // 2. Find user by (in order):
+  //    - invoice.metadata.userId (existing)
+  //    - customer email
+  //    - customer phone
+  const userRef = await findUserRef(invoice, customer);
+  
+  if (!userRef) {
+    logger.warn('No matching user found for payment', {
       invoiceId: invoice.id,
-      customer: invoice.customer
+      customer: customer.id
     });
-    throw new Error('userId missing in invoice metadata');
+    return;
   }
 
-  const userRef = db.collection('users').doc(userId);
+  // 3. Update Firestore
+  await userRef.update({
+    verified: true,
+    lastPaymentDate: FieldValue.serverTimestamp(),
+    subscriptionStatus: 'active',
+    stripeCustomerId: customer.id
+  });
+  
+  logger.info(`User verified via payment: ${userRef.id}`);
+}
 
-  // 2. Prepare failure data
-  const failureData = {
-    lastPaymentFailed: true,
-    paymentFailureDate: FieldValue.serverTimestamp(),
-    paymentFailureReason: invoice.attempt_count > 1 ? 'repeated_failure' : 'first_failure',
-    paymentFailureAmount: invoice.amount_due / 100,
-    nextPaymentAttempt: invoice.next_payment_attempt 
-      ? new Date(invoice.next_payment_attempt * 1000)
-      : null,
-    updatedAt: FieldValue.serverTimestamp()
-  };
 
-  try {
-    // 3. Update Firestore
-    await userRef.update(failureData);
-    logger.warn('Payment failure recorded', {
-      userId,
-      attemptCount: invoice.attempt_count,
-      amountDue: failureData.paymentFailureAmount
+async function handlePaymentFailure(invoice) {
+  const customer = await stripe.customers.retrieve(invoice.customer);
+  const userRef = await findUserRef(invoice, customer);
+  
+  if (userRef) {
+    await userRef.update({
+      lastPaymentFailed: true,
+      paymentFailureDate: FieldValue.serverTimestamp()
+      // Don't set verified:false yet (give grace period)
     });
+  }
+}
 
-    // 4. Send notification email if enabled
-    if (process.env.SEND_PAYMENT_FAILURE_EMAILS === 'true') {
-      const user = (await userRef.get()).data();
-      
-      if (user?.email) {
-        const mailOptions = {
-          from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
-          to: user.email,
-          subject: `Payment Failed - Attempt ${invoice.attempt_count}`,
-          html: `
-            <h2>Payment Failed</h2>
-            <p>We couldn't process your payment of $${failureData.paymentFailureAmount.toFixed(2)}.</p>
-            ${failureData.nextPaymentAttempt ? `
-              <p>Next attempt: ${failureData.nextPaymentAttempt.toLocaleString()}</p>
-            ` : ''}
-            <a href="${process.env.FRONTEND_URL}/billing" style="
-              display: inline-block;
-              padding: 10px 20px;
-              background: #4CAF50;
-              color: white;
-              text-decoration: none;
-              border-radius: 5px;
-              margin-top: 15px;
-            ">Update Payment Method</a>
-            <p style="margin-top: 20px; color: #666;">
-              Please update your payment details to avoid service interruption.
-            </p>
-          `
-        };
 
-        await transporter.sendMail(mailOptions);
-        logger.info('Payment failure email sent', { userId });
-      }
+async function handleSubscriptionChange(subscription) {
+  const customer = await stripe.customers.retrieve(subscription.customer);
+  const userRef = await findUserRef(subscription, customer);
+  
+  if (userRef) {
+    const updates = {
+      subscriptionStatus: subscription.status,
+      currentPeriodEnd: new Date(subscription.current_period_end * 1000)
+    };
+    
+    // Auto-update verification status
+    if (['canceled', 'unpaid'].includes(subscription.status)) {
+      updates.verified = false;
     }
-  } catch (error) {
-    logger.error('Failed to handle payment failure', {
-      userId,
-      error: error.message,
-      stack: error.stack
-    });
-    throw error;
+    
+    await userRef.update(updates);
   }
 }
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+async function findUserRef(stripeObject, customer) {
+  // 1. Try metadata first
+  if (stripeObject.metadata?.userId) {
+    const doc = db.collection('users').doc(stripeObject.metadata.userId);
+    const exists = (await doc.get()).exists;
+    if (exists) return doc;
+  }
+  
+  // 2. Try email lookup
+  if (customer.email) {
+    const emailQuery = await db.collection('users')
+      .where('email', '==', customer.email)
+      .limit(1)
+      .get();
+      
+    if (!emailQuery.empty) return emailQuery.docs[0].ref;
+  }
+  
+  // 3. Try phone lookup
+  if (customer.phone) {
+    const phoneQuery = await db.collection('users')
+      .where('phone', '==', customer.phone.replace(/\D/g, ''))
+      .limit(1)
+      .get();
+      
+    if (!phoneQuery.empty) return phoneQuery.docs[0].ref;
+  }
+  
+  return null;
+}
 
 
 
