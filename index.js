@@ -111,82 +111,117 @@ app.post('/api/stripe-webhook',
 // ==================== Helper Functions ====================
 
 async function handleSubscriptionChange(subscription) {
-  // 1. Validate required metadata
-  const userId = subscription.metadata?.userId;
-  if (!userId) {
-    logger.warn('Subscription missing userId metadata', {
-      subscriptionId: subscription.id,
-      metadata: subscription.metadata
-    });
-    throw new Error('userId missing in subscription metadata');
-  }
-
-  // 2. Prepare update data
-  const subscriptionData = {
-    stripeSubscriptionId: subscription.id,
-    subscriptionStatus: subscription.status,
-    plan: subscription.items?.data[0]?.plan?.nickname || 'Unknown Plan',
-    currentPeriodEnd: subscription.current_period_end 
-      ? new Date(subscription.current_period_end * 1000)
-      : null,
-    updatedAt: FieldValue.serverTimestamp()
-  };
-
-  // 3. Update Firestore
   try {
-    await db.collection('users').doc(userId).update(subscriptionData);
+    // 1. Find user reference (using metadata, email, or phone)
+    const customer = await stripe.customers.retrieve(subscription.customer);
+    const userRef = await findUserRef(subscription, customer);
+    
+    if (!userRef) {
+      logger.warn('No matching user found for subscription', {
+        subscriptionId: subscription.id,
+        customerId: subscription.customer
+      });
+      return; // Skip processing but don't throw error
+    }
+
+    // 2. Prepare update data
+    const subscriptionData = {
+      stripeSubscriptionId: subscription.id,
+      subscriptionStatus: subscription.status,
+      plan: subscription.items?.data[0]?.plan?.nickname || 'Unknown Plan',
+      currentPeriodEnd: subscription.current_period_end 
+        ? new Date(subscription.current_period_end * 1000)
+        : null,
+      updatedAt: FieldValue.serverTimestamp()
+    };
+
+    // 3. Auto-update verification status based on subscription state
+    if (['active', 'trialing'].includes(subscription.status)) {
+      subscriptionData.verified = true;
+    } else if (['canceled', 'unpaid', 'past_due'].includes(subscription.status)) {
+      subscriptionData.verified = false;
+    }
+
+    // 4. Update Firestore
+    await userRef.update(subscriptionData);
+    
     logger.info('Subscription data updated', {
-      userId,
+      userId: userRef.id,
+      status: subscription.status,
       changes: Object.keys(subscriptionData)
     });
+
+    // 5. Send notifications if subscription ended
+    if (subscription.status === 'canceled') {
+      await sendSubscriptionEndNotification(userRef.id);
+    }
+
   } catch (error) {
-    logger.error('Failed to update subscription', {
-      userId,
+    logger.error('Failed to process subscription change', {
+      subscriptionId: subscription.id,
       error: error.message,
-      subscriptionId: subscription.id
+      stack: error.stack
     });
     throw error; // Will trigger Stripe retry
   }
 }
 
-async function handleInvoicePaid(invoice) {
-  // 1. Validate required metadata
-  const userId = invoice.metadata?.userId;
-  if (!userId) {
-    logger.warn('Paid invoice missing userId metadata', {
-      invoiceId: invoice.id,
-      customer: invoice.customer
-    });
-    throw new Error('userId missing in invoice metadata');
+// Helper function to find user reference
+async function findUserRef(stripeObject, customer) {
+  // 1. Try metadata first
+  if (stripeObject.metadata?.userId) {
+    const doc = db.collection('users').doc(stripeObject.metadata.userId);
+    if ((await doc.get()).exists) return doc;
   }
+  
+  // 2. Fallback to customer email
+  if (customer.email) {
+    const emailQuery = await db.collection('users')
+      .where('email', '==', customer.email)
+      .limit(1)
+      .get();
+    if (!emailQuery.empty) return emailQuery.docs[0].ref;
+  }
+  
+  // 3. Fallback to customer phone
+  if (customer.phone) {
+    const phoneQuery = await db.collection('users')
+      .where('phone', '==', customer.phone.replace(/\D/g, ''))
+      .limit(1)
+      .get();
+    if (!phoneQuery.empty) return phoneQuery.docs[0].ref;
+  }
+  
+  return null;
+}
 
-  // 2. Prepare payment data
-  const paymentData = {
-    lastPaymentDate: FieldValue.serverTimestamp(),
-    lastPaymentAmount: invoice.amount_paid / 100,
-    lastPaymentCurrency: invoice.currency.toUpperCase(),
-    lastPaymentStatus: 'paid',
-    lastPaymentInvoice: invoice.id,
-    updatedAt: FieldValue.serverTimestamp()
-  };
-
-  // 3. Update Firestore
+// Optional notification function
+async function sendSubscriptionEndNotification(userId) {
+  if (process.env.SEND_SUBSCRIPTION_EMAILS !== 'true') return;
+  
   try {
-    await db.collection('users').doc(userId).update(paymentData);
-    logger.info('Payment recorded successfully', {
-      userId,
-      amount: paymentData.lastPaymentAmount,
-      currency: paymentData.lastPaymentCurrency
-    });
+    const userDoc = await db.collection('users').doc(userId).get();
+    const user = userDoc.data();
+    
+    if (user?.email) {
+      await transporter.sendMail({
+        from: `"SureTalk Support" <${process.env.EMAIL_USER}>`,
+        to: user.email,
+        subject: 'Your Subscription Has Ended',
+        html: `
+          <h2>Subscription Update</h2>
+          <p>Your SureTalk subscription has ended.</p>
+          <a href="${process.env.FRONTEND_URL}/resubscribe" style="...">
+            Renew Your Subscription
+          </a>
+        `
+      });
+    }
   } catch (error) {
-    logger.error('Failed to record payment', {
-      userId,
-      error: error.message,
-      invoiceId: invoice.id
-    });
-    throw error;
+    logger.error('Failed to send subscription end notification', { userId, error });
   }
 }
+
 
 
 async function handlePaymentSuccess(invoice) {
@@ -1236,10 +1271,6 @@ app.post('/api/save-pin', limiter, async (req, res) => {
 
 
 
-
-
-
-
 // ==================== Server Startup ====================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
@@ -1248,3 +1279,8 @@ app.listen(PORT, () => {
     allowedOrigins
   });
 });
+
+
+// Created by: stacktechnologies
+// Last Updated: 2025-04-10
+// Project: SureTalk backend server
