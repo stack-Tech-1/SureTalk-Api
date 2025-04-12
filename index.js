@@ -461,16 +461,6 @@ app.get('/api/check-userid', async (req, res) => {
 });
 
 
-
-
-
-
-
-
-
-
-
-
 // Signup Route
 app.post('/api/signup', limiter, async (req, res) => {
   try {
@@ -499,7 +489,7 @@ app.post('/api/signup', limiter, async (req, res) => {
     }
 
     // Generate userId if not provided
-    //userId = userId || generateUserId();
+    userId = userId || generateUserId();
 
     //console.log('Checking for email:', normalizedEmail);
     //console.log('Checking for userId:', userId);
