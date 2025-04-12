@@ -338,7 +338,9 @@ const corsOptions = {
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  exposedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 200 
 };
 
 app.options('*', cors(corsOptions));
@@ -759,7 +761,11 @@ app.post('/api/request-recovery', limiter, async (req, res) => {
     const { email } = req.body;
 
     if (!email) {
-      return res.status(400).json({ error: 'Email is required' });
+      return res.status(400).json({ 
+        status: 'error',
+        error: 'Email is required',
+        code: 'MISSING_EMAIL'
+      });
     }
 
     const normalizedEmail = sanitizeHtml(email).toLowerCase().trim();
@@ -771,7 +777,11 @@ app.post('/api/request-recovery', limiter, async (req, res) => {
       .get();
 
     if (querySnapshot.empty) {
-      return res.status(404).json({ error: 'No account found with this email' });
+      return res.status(404).json({ 
+        status: 'error',
+        error: 'No account found with this email',
+        code: 'USER_NOT_FOUND'
+      });
     }
 
     const userDoc = querySnapshot.docs[0];
@@ -780,7 +790,7 @@ app.post('/api/request-recovery', limiter, async (req, res) => {
     // Generate recovery token
     const recoveryToken = generateToken();
     const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 1); // 1 hour expiration
+    expiresAt.setHours(expiresAt.getHours() + 1);
 
     // Save recovery token
     await db.collection('recovery-tokens').doc(recoveryToken).set({
@@ -807,14 +817,27 @@ app.post('/api/request-recovery', limiter, async (req, res) => {
       `
     });
 
-    res.json({ 
-      success: true, 
-      message: 'Recovery email sent. Please check your inbox.' 
+    // Consistent success response
+    res.status(200).json({ 
+      status: 'success',
+      message: 'Recovery email sent. Please check your inbox.',
+      data: {
+        email: normalizedEmail,
+        timestamp: new Date().toISOString()
+      }
     });
 
   } catch (error) {
-    logger.error('Recovery request failed', { error });
-    res.status(500).json({ error: 'Account recovery failed' });
+    logger.error('Recovery request failed', { 
+      error: error.message,
+      stack: error.stack
+    });
+    res.status(500).json({ 
+      status: 'error',
+      error: 'Account recovery failed',
+      code: 'SERVER_ERROR',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
