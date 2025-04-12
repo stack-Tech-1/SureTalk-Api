@@ -465,13 +465,25 @@ app.post('/api/signup', limiter, async (req, res) => {
     const emailQuery = await usersRef.where('email', '==', normalizedEmail).limit(1).get();
     const userIdQuery = await usersRef.where('userId', '==', userId).limit(1).get();
 
+   // if (!emailQuery.empty) {
+     // return res.status(409).json({ error: 'Email already registered' });
+    //}
     if (!emailQuery.empty) {
-      return res.status(409).json({ error: 'Email already registered' });
+      console.log('❌ Duplicate email found for', normalizedEmail);
+      return res.status(409).json({ 
+        error: 'Email already registered',
+        debug: { email: normalizedEmail }
+      });
     }
+    
+
+
 
     if (!userIdQuery.empty) {
       return res.status(409).json({ error: 'User ID already exists' });
     }
+
+
 
     // Create user
     await usersRef.doc(userId).set({
