@@ -539,7 +539,7 @@ app.post('/api/signup', limiter, async (req, res) => {
 // Resend Verification Email Route
 app.get('/api/resend-verification', async (req, res) => {
   const { email } = req.query;
-  
+
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
   }
@@ -555,17 +555,19 @@ app.get('/api/resend-verification', async (req, res) => {
     const user = userDoc.docs[0].data();
     const userId = user.userId;
 
-    // Generate a new token (or check if an existing one can be reused)
-    const token = generateVerificationToken(userId, email); 
+    // Generate a new token using the defined function
+    const token = generateVerificationToken(userId, email);
+    
+    // Store the token in the Firestore collection
     await db.collection('verification-tokens').doc(token).set({
       userId,
       email,
       used: false,
-      expiresAt: FieldValue.serverTimestamp(),
+      expiresAt: FieldValue.serverTimestamp(),  
     });
 
     // Send the verification email again
-    await sendVerificationEmail(email, userId, token); 
+    await sendVerificationEmail(email, userId, token);
 
     res.status(200).json({ message: 'Verification email resent successfully' });
 
@@ -574,6 +576,7 @@ app.get('/api/resend-verification', async (req, res) => {
     res.status(500).json({ error: 'Failed to resend verification email' });
   }
 });
+
 
 
 
