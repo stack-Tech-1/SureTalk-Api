@@ -461,6 +461,14 @@ app.get('/api/check-userid', async (req, res) => {
 });
 
 
+
+// Function to generate a verification token
+function generateVerificationToken(userId, email) {
+  const token = crypto.randomBytes(32).toString('hex'); 
+  return token;
+}
+
+
 // Signup Route
 app.post('/api/signup', limiter, async (req, res) => {
   try {
@@ -557,6 +565,9 @@ app.get('/api/resend-verification', async (req, res) => {
 
     // Generate a new token using the defined function
     const token = generateVerificationToken(userId, email);
+
+    //expiration date set to 24 hours from now
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     
     // Store the token in the Firestore collection
     await db.collection('verification-tokens').doc(token).set({
