@@ -534,6 +534,52 @@ app.post('/api/signup', limiter, async (req, res) => {
   }
 });
 
+
+
+// Resend Verification Email Route
+app.get('/api/resend-verification', async (req, res) => {
+  const { email } = req.query;
+  
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  try {
+    // Check if the user exists
+    const userDoc = await db.collection('users').where('email', '==', email).limit(1).get();
+    if (userDoc.empty) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Assuming `userDoc` is a single document and we're accessing the first item
+    const user = userDoc.docs[0].data();
+    const userId = user.userId;
+
+    // Generate a new token (or check if an existing one can be reused)
+    const token = generateVerificationToken(userId, email); 
+    await db.collection('verification-tokens').doc(token).set({
+      userId,
+      email,
+      used: false,
+      expiresAt: FieldValue.serverTimestamp(),
+    });
+
+    // Send the verification email again
+    await sendVerificationEmail(email, userId, token); 
+
+    res.status(200).json({ message: 'Verification email resent successfully' });
+
+  } catch (error) {
+    logger.error('Resend verification failed', { error: error.message });
+    res.status(500).json({ error: 'Failed to resend verification email' });
+  }
+});
+
+
+
+
+
+
 // Email Verification Route
 app.get('/api/verify-email', async (req, res) => {
   const { token, email, userId } = req.query;
