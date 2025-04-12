@@ -456,6 +456,10 @@ app.post('/api/signup', limiter, async (req, res) => {
     // Generate userId if not provided
     userId = userId || generateUserId();
 
+    console.log('Checking for email:', normalizedEmail);
+    console.log('Checking for userId:', userId);
+
+
     // Check for existing user
     const usersRef = db.collection('users');
     const emailQuery = await usersRef.where('email', '==', normalizedEmail).limit(1).get();
