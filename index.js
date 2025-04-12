@@ -426,6 +426,51 @@ function generateAuthToken(userId) {
 
 // ==================== Routes ====================
 
+// Check email availability
+app.get('/api/check-email', async (req, res) => {
+  const email = req.query.email?.toLowerCase().trim();
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+
+  const snapshot = await db.collection('users')
+    .where('email', '==', email)
+    .limit(1)
+    .get();
+
+  if (!snapshot.empty) {
+    return res.status(409).json({ error: 'Email already in use' });
+  }
+
+  res.json({ available: true });
+});
+
+// Check userId availability
+app.get('/api/check-userid', async (req, res) => {
+  const userId = req.query.userId?.trim();
+  if (!userId) return res.status(400).json({ error: 'User ID is required' });
+
+  const snapshot = await db.collection('users')
+    .where('userId', '==', userId)
+    .limit(1)
+    .get();
+
+  if (!snapshot.empty) {
+    return res.status(409).json({ error: 'User ID already taken' });
+  }
+
+  res.json({ available: true });
+});
+
+
+
+
+
+
+
+
+
+
+
+
 // Signup Route
 app.post('/api/signup', limiter, async (req, res) => {
   try {
@@ -454,34 +499,24 @@ app.post('/api/signup', limiter, async (req, res) => {
     }
 
     // Generate userId if not provided
-    userId = userId || generateUserId();
+    //userId = userId || generateUserId();
 
-    console.log('Checking for email:', normalizedEmail);
-    console.log('Checking for userId:', userId);
+    //console.log('Checking for email:', normalizedEmail);
+    //console.log('Checking for userId:', userId);
 
 
     // Check for existing user
-    const usersRef = db.collection('users');
-    const emailQuery = await usersRef.where('email', '==', normalizedEmail).limit(1).get();
-    const userIdQuery = await usersRef.where('userId', '==', userId).limit(1).get();
+    //const usersRef = db.collection('users');
+    //const emailQuery = await usersRef.where('email', '==', normalizedEmail).limit(1).get();
+    //const userIdQuery = await usersRef.where('userId', '==', userId).limit(1).get();
 
    // if (!emailQuery.empty) {
      // return res.status(409).json({ error: 'Email already registered' });
     //}
-    if (!emailQuery.empty) {
-      console.log('❌ Duplicate email found for', normalizedEmail);
-      return res.status(409).json({ 
-        error: 'Email already registered',
-        debug: { email: normalizedEmail }
-      });
-    }
     
-
-
-
-    if (!userIdQuery.empty) {
-      return res.status(409).json({ error: 'User ID already exists' });
-    }
+    //if (!userIdQuery.empty) {
+      //return res.status(409).json({ error: 'User ID already exists' });
+   // }
 
 
 
