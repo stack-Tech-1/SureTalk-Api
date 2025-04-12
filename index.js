@@ -496,20 +496,8 @@ app.post('/api/signup', limiter, async (req, res) => {
 
 
     // Check for existing user
-    //const usersRef = db.collection('users');
-    //const emailQuery = await usersRef.where('email', '==', normalizedEmail).limit(1).get();
-    //const userIdQuery = await usersRef.where('userId', '==', userId).limit(1).get();
-
-   // if (!emailQuery.empty) {
-     // return res.status(409).json({ error: 'Email already registered' });
-    //}
-    
-    //if (!userIdQuery.empty) {
-      //return res.status(409).json({ error: 'User ID already exists' });
-   // }
-
-
-
+    const usersRef = db.collection('users');
+   
     // Create user
     await usersRef.doc(userId).set({
       userId,
