@@ -482,7 +482,8 @@ app.post('/api/signup', limiter, async (req, res) => {
       updatedAt: FieldValue.serverTimestamp(),
       status: 'pending',
       verified: false,
-      emailVerified: false
+      emailVerified: false,
+      smsConsent: true 
     });
 
     // Send verification email
