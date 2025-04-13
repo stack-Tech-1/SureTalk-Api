@@ -1099,7 +1099,7 @@ app.get('/api/verify-user', limiter, async (req, res) => {
   }
 });
 
-// Check Slot Availability
+//////////////////////Check Slot Availability//////////////////////////
 app.get('/check-slot', async (req, res) => {
   const { userId, slotNumber } = req.query;
 
@@ -1352,6 +1352,7 @@ app.post('/api/save-pin', limiter, async (req, res) => {
     await userRef.set({
       userId,
       userPin: hashedPin,
+      signingType: 'call',
       verified: true,
       status: 'active',
       emailVerified: false, 
