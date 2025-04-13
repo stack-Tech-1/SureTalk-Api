@@ -16,7 +16,7 @@ if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     databaseURL: `https://${serviceAccount.project_id}.firebaseio.com`,
-    storageBucket: "suretalkdb.appspot.com"
+    storageBucket: "suretalkdb.appspot.com" // Correct format
   });
 }
 
@@ -25,7 +25,6 @@ const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
 const storage = admin.storage().bucket();
 
-// Export all needed services
 module.exports = { 
   db, 
   FieldValue, 
