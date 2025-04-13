@@ -1302,7 +1302,7 @@ app.get('/get-slot', async (req, res) => {
   }
 });
 
-// Delete Slot Data
+// ================Delete Slot Data=========================
 app.post('/delete-slot', async (req, res) => {
   const { userId, slotNumber } = req.body;
 
@@ -1358,7 +1358,7 @@ app.post('/delete-slot', async (req, res) => {
   }
 });
 
-// Update User Credentials
+// ===========================Update User Credentials===========================
 app.post('/update-credentials', async (req, res) => {
   const { oldUserId, newUserId, newPin } = req.body;
 
