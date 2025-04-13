@@ -1099,7 +1099,7 @@ app.get('/api/verify-user', limiter, async (req, res) => {
   }
 });
 
-//////////////////////Check Slot Availability//////////////////////////
+// =====================Check Slot Availability=======================
 app.get('/check-slot', async (req, res) => {
   const { userId, slotNumber } = req.query;
 
@@ -1128,11 +1128,11 @@ app.get('/check-slot', async (req, res) => {
   }
 });
 
-// Save Slot Data
+// =========================Save Slot Data================================
 app.post('/save-slot', async (req, res) => {
   const { userId, slotNumber, contact, voiceMessage } = req.body;
 
-  if (!userId || !slotNumber || !contact || !voiceMessage) {
+  if (!userId || !slotNumber || !voiceMessage) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
@@ -1317,7 +1317,7 @@ app.post('/update-credentials', async (req, res) => {
   }
 });
 
-// Save User PIN 
+// =======================Save User PIN=========================== 
 app.post('/api/save-pin', limiter, async (req, res) => {
   try {
     const { userId, userPin } = req.body;
