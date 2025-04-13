@@ -1317,7 +1317,7 @@ app.post('/update-credentials', async (req, res) => {
   }
 });
 
-// Save User PIN and Verify
+// Save User PIN 
 app.post('/api/save-pin', limiter, async (req, res) => {
   try {
     const { userId, userPin } = req.body;
@@ -1362,14 +1362,10 @@ app.post('/api/save-pin', limiter, async (req, res) => {
 
     logger.info('New user PIN created', { userId });
 
-    // Generate auth token for immediate login
-    const token = generateAuthToken(userId);
-
     return res.status(201).json({ 
       success: true,
       message: 'User credentials saved successfully',
-      userId,
-      token // Include auth token in response
+      userId
     });
 
   } catch (error) {
