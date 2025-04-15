@@ -1384,7 +1384,9 @@ app.post('/update-credentials', async (req, res) => {
       updates.requiresPinReset = false;
     }
 
-    if (!newUserId) {
+    // Add this check at the beginning of the update logic
+    if (!newUserId || newUserId === oldUserId) {
+      // Only updating PIN or providing same ID - no document recreation needed
       await oldUserRef.update(updates);
       await oldUserRef.update({
         tempPin: FieldValue.delete(),
@@ -1393,6 +1395,7 @@ app.post('/update-credentials', async (req, res) => {
       return res.json({ success: true, message: 'PIN updated successfully' });
     }
 
+    // Only reach this point if newUserId is different from oldUserId
     updates.userId = newUserId;
 
     const newUserRef = db.collection('users').doc(newUserId);
