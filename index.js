@@ -1491,6 +1491,71 @@ app.post('/api/save-pin', limiter, async (req, res) => {
 });
 
 
+// ==================== Update Verification Status Endpoint ====================
+app.post('/api/set-verification-false', limiter, async (req, res) => {
+  try {
+    const { userId, userPin } = req.body;
+
+    // Input validation
+    if (!userId || !userPin) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: 'Both userId and userPin are required'
+      });
+    }
+
+    // Get user document
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+
+    // Check if user exists
+    if (!userDoc.exists) {
+      return res.status(404).json({ 
+        error: 'User not found',
+        suggestion: 'Please check your userId'
+      });
+    }
+
+    const userData = userDoc.data();
+
+    // Verify user PIN
+    const isPinValid = await bcrypt.compare(userPin, userData.userPin);
+    if (!isPinValid) {
+      return res.status(401).json({ 
+        error: 'Invalid credentials',
+        details: 'The userId or userPin you entered is incorrect'
+      });
+    }
+
+    // Update verification status to false
+    await userRef.update({
+      verified: false,
+      updatedAt: FieldValue.serverTimestamp()
+    });
+
+    logger.info('User verification status updated to false', { userId });
+
+    return res.json({ 
+      success: true,
+      message: 'User verification status set to false',
+      userId,
+      verified: false
+    });
+
+  } catch (error) {
+    logger.error('Failed to update verification status', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.body.userId
+    });
+    return res.status(500).json({ 
+      error: 'Failed to update verification status',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
 
 
 // Error-handling middleware
