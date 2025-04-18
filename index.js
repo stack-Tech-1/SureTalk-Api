@@ -1556,6 +1556,54 @@ app.post('/api/set-verification-false', limiter, async (req, res) => {
 });
 
 
+app.post('/api/subscribe-user', async (req, res) => {
+  const { customerId, paymentMethod, userId, token } = req.body;
+
+  // === 1. Validate API key/token ===
+  if (!token || token !== process.env.TWILIO_SECRET_TOKEN) {
+    logger.warn('Unauthorized subscription attempt', { tokenReceived: token });
+    return res.status(401).json({ error: 'Unauthorized access' });
+  }
+
+  try {
+    // === 2. Attach payment method if not already default ===
+    await stripe.customers.update(customerId, {
+      invoice_settings: { default_payment_method: paymentMethod }
+    });
+
+    // === 3. Create monthly subscription ===
+    const subscription = await stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: process.env.STRIPE_MONTHLY_PRICE_ID }],
+      expand: ['latest_invoice.payment_intent']
+    });
+
+    // === 4. Update Firestore to mark verified ===
+    const userRef = db.collection('users').doc(userId);
+    await userRef.update({
+      verified: true,
+      stripeCustomerId: customerId,
+      subscriptionId: subscription.id,
+      subscriptionStatus: 'active',
+      updatedAt: FieldValue.serverTimestamp()
+    });
+
+    logger.info('User successfully subscribed and verified', {
+      userId,
+      customerId,
+      subscriptionId: subscription.id
+    });
+
+    res.status(200).json({ success: true });
+
+  } catch (err) {
+    logger.error('Subscription setup failed', { error: err.message, userId, customerId });
+    res.status(500).json({ error: 'Subscription failed', details: err.message });
+  }
+});
+
+
+
 
 
 // Error-handling middleware
