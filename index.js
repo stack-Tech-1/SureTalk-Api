@@ -17,6 +17,8 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const price_id = require('price_id')(process.env.STRIPE_PRICE_ID); 
+const bodyParser = require('body-parser');
 
 // ==================== Initialize Express ====================
 const app = express();
@@ -1521,6 +1523,54 @@ app.post('/api/subscribe-user', async (req, res) => {
   }
 });
 
+
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
+
+
+// ========================Webhook for Stripe Events===========================
+app.post('/start-payment-setup', async (req, res) => {
+  try {
+    const { ProfileId, PaymentToken } = req.body;
+
+    if (!ProfileId || !PaymentToken) {
+      return res.send(`<Response><Say>Missing payment information.</Say></Response>`);
+    }
+
+    // Attach the payment method to the customer
+    const customerId = ProfileId;
+    const paymentMethodId = PaymentToken;
+
+    await stripe.paymentMethods.attach(paymentMethodId, {
+      customer: customerId,
+    });
+
+    // Set the default payment method
+    await stripe.customers.update(customerId, {
+      invoice_settings: {
+        default_payment_method: paymentMethodId,
+      },
+    });
+
+    // Create a subscription
+    const subscription = await stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: price_id }], 
+      payment_settings: {
+        payment_method_types: ['card'],
+        save_default_payment_method: 'on_subscription',
+      },
+      expand: ['latest_invoice.payment_intent'],
+    });
+
+    console.log('✅ Subscription created:', subscription.id);
+
+    res.send(`<Response><Say>Your subscription was successful. Thank you!</Say></Response>`);
+  } catch (err) {
+    console.error('❌ Error:', err.message);
+    res.send(`<Response><Say>Something went wrong while processing your payment.</Say></Response>`);
+  }
+});
 
 
 // Error-handling middleware
