@@ -387,9 +387,7 @@ const sendVerificationEmail = async (email, userId) => {
     html: `
       <h2>Welcome to SureTalk!</h2>
       <p>Please verify your email address to complete your registration:</p>
-      <a href="${verificationLink}" style="...">Verify Email</a>
-      <p>Once verified, you can start your subscription here:</p>
-      <a href="${subscriptionLink}" style="...">Start Subscription</a>
+      <a href="${verificationLink}" style="...">Verify Email</a>      
       <p>This link expires in 24 hours.</p>
     `
   });
