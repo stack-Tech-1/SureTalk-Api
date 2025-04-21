@@ -1530,26 +1530,26 @@ app.use(bodyParser.json());
 
 app.post('/start-payment-setup', async (req, res) => {
   try {
-    const { ProfileId, PaymentToken } = req.body; // <-- Now using PaymentToken (Stripe PaymentMethod ID)
+    const { ProfileId, PaymentToken } = req.body;
 
     if (!ProfileId || !PaymentToken) {
       res.set('Content-Type', 'text/xml');
       return res.send(`<Response><Say>Missing payment information.</Say></Response>`);
     }
 
-    // Attach the PaymentMethod to the Customer (if not already attached)
+    // 1. Attach PaymentMethod to Customer
     await stripe.paymentMethods.attach(PaymentToken, {
       customer: ProfileId,
     });
 
-    // Set as default payment method
+    // 2. Set as default payment method
     await stripe.customers.update(ProfileId, {
       invoice_settings: {
         default_payment_method: PaymentToken,
       },
     });
 
-    // Create subscription
+    // 3. Create subscription
     const subscription = await stripe.subscriptions.create({
       customer: ProfileId,
       items: [{ price: 'price_1RFBXvAOy2W6vlFokwIELKQX' }],
@@ -1564,10 +1564,18 @@ app.post('/start-payment-setup', async (req, res) => {
 
     res.set('Content-Type', 'text/xml');
     res.send(`<Response><Say>Your subscription was successful. Thank you!</Say></Response>`);
+
   } catch (err) {
-    console.error('❌ Error:', err.message);
+    console.error('❌ Stripe Error:', err.message);
+    
+    // More detailed error response (for debugging)
+    let errorMessage = "Payment failed. Please try again later.";
+    if (err.type === 'StripeCardError') {
+      errorMessage = "Your card was declined. Please try another card.";
+    }
+
     res.set('Content-Type', 'text/xml');
-    res.send(`<Response><Say>Payment failed. Please try again later.</Say></Response>`);
+    res.send(`<Response><Say>${errorMessage}</Say></Response>`);
   }
 });
 
