@@ -1530,28 +1530,31 @@ app.use(bodyParser.json());
 
 app.post('/start-payment-setup', async (req, res) => {
   try {
-    const { ProfileId, PaymentToken } = req.body;
+    const { PaymentToken } = req.body; // Only PaymentToken is required
 
-    if (!ProfileId || !PaymentToken) {
+    if (!PaymentToken) {
       res.set('Content-Type', 'text/xml');
-      return res.send(`<Response><Say>Missing payment information.</Say></Response>`);
+      return res.send(`<Response><Say>Missing payment token.</Say></Response>`);
     }
 
-    // 1. Attach PaymentMethod to Customer
+    // 1. Create a new Stripe Customer
+    const customer = await stripe.customers.create();
+
+    // 2. Attach the PaymentMethod to the Customer
     await stripe.paymentMethods.attach(PaymentToken, {
-      customer: ProfileId,
+      customer: customer.id,
     });
 
-    // 2. Set as default payment method
-    await stripe.customers.update(ProfileId, {
+    // 3. Set as default payment method
+    await stripe.customers.update(customer.id, {
       invoice_settings: {
         default_payment_method: PaymentToken,
       },
     });
 
-    // 3. Create subscription
+    // 4. Create subscription
     const subscription = await stripe.subscriptions.create({
-      customer: ProfileId,
+      customer: customer.id,
       items: [{ price: 'price_1RFBXvAOy2W6vlFokwIELKQX' }],
       payment_settings: {
         payment_method_types: ['card'],
@@ -1560,15 +1563,14 @@ app.post('/start-payment-setup', async (req, res) => {
       expand: ['latest_invoice.payment_intent'],
     });
 
-    console.log('✅ Subscription created:', subscription.id);
+    console.log('✅ Subscription created for customer:', customer.id);
 
     res.set('Content-Type', 'text/xml');
-    res.send(`<Response><Say>Your subscription was successful. Thank you!</Say></Response>`);
+    res.send(`<Response><Say>Subscription activated! Thank you.</Say></Response>`);
 
   } catch (err) {
     console.error('❌ Stripe Error:', err.message);
-    
-    // More detailed error response (for debugging)
+
     let errorMessage = "Payment failed. Please try again later.";
     if (err.type === 'StripeCardError') {
       errorMessage = "Your card was declined. Please try another card.";
