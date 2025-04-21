@@ -22,7 +22,6 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const app = express();
 
 
-
 // ==================== Logger Configuration ====================
 const logger = winston.createLogger({
   level: 'info',
@@ -139,12 +138,23 @@ async function handleSubscriptionChange(subscription) {
       updatedAt: FieldValue.serverTimestamp()
     };
 
+    
+      
     // 3. Auto-update verification status based on subscription state
     if (['active', 'trialing'].includes(subscription.status)) {
       subscriptionData.verified = true;
     } else if (['canceled', 'unpaid', 'past_due'].includes(subscription.status)) {
       subscriptionData.verified = false;
-    }
+
+      // Get user data to send discontinuation email
+      const userDoc = await userRef.get();
+      if (userDoc.exists && userDoc.data().email) {
+        await sendDiscontinuationEmail(
+          userDoc.data().email,
+          userDoc.data().firstName || 'Customer'
+        );
+    }     
+  }
 
     // 4. Update Firestore
     await userRef.update(subscriptionData);
@@ -170,34 +180,6 @@ async function handleSubscriptionChange(subscription) {
   }
 }
 
-// Helper function to find user reference
-async function findUserRef(stripeObject, customer) {
-  // 1. Try metadata first
-  if (stripeObject.metadata?.userId) {
-    const doc = db.collection('users').doc(stripeObject.metadata.userId);
-    if ((await doc.get()).exists) return doc;
-  }
-  
-  // 2. Fallback to customer email
-  if (customer.email) {
-    const emailQuery = await db.collection('users')
-      .where('email', '==', customer.email)
-      .limit(1)
-      .get();
-    if (!emailQuery.empty) return emailQuery.docs[0].ref;
-  }
-  
-  // 3. Fallback to customer phone
-  if (customer.phone) {
-    const phoneQuery = await db.collection('users')
-      .where('phone', '==', customer.phone.replace(/\D/g, ''))
-      .limit(1)
-      .get();
-    if (!phoneQuery.empty) return phoneQuery.docs[0].ref;
-  }
-  
-  return null;
-}
 
 // Optional notification function
 async function sendSubscriptionEndNotification(userId) {
@@ -268,26 +250,6 @@ async function handlePaymentFailure(invoice) {
       paymentFailureDate: FieldValue.serverTimestamp()
       // Don't set verified:false yet (give grace period)
     });
-  }
-}
-
-
-async function handleSubscriptionChange(subscription) {
-  const customer = await stripe.customers.retrieve(subscription.customer);
-  const userRef = await findUserRef(subscription, customer);
-  
-  if (userRef) {
-    const updates = {
-      subscriptionStatus: subscription.status,
-      currentPeriodEnd: new Date(subscription.current_period_end * 1000)
-    };
-    
-    // Auto-update verification status
-    if (['canceled', 'unpaid'].includes(subscription.status)) {
-      updates.verified = false;
-    }
-    
-    await userRef.update(updates);
   }
 }
 
@@ -414,18 +376,21 @@ const sendVerificationEmail = async (email, userId) => {
     createdAt: FieldValue.serverTimestamp()
   });
 
-  // Point directly to API endpoint
-  const verificationLink = `https://suretalk-api.onrender.com/api/verify-email?token=${token}&email=${encodeURIComponent(email)}&userId=${userId}`;
+  
+  const verificationLink = `${process.env.FRONTEND_URL}/verify-email?token=${token}`;
+  const subscriptionLink = "https://buy.stripe.com/bIY1806DG7qw6uk144"; // Stripe link
 
   await transporter.sendMail({
     from: `"SureTalk" <${process.env.EMAIL_USER}>`,
     to: email,
     subject: 'Verify Your Email Address',
     html: `
-      <p>Welcome to SureTalk! Please verify your email address:</p>
-      <a href="${verificationLink}">Click here to verify your email</a>
+      <h2>Welcome to SureTalk!</h2>
+      <p>Please verify your email address to complete your registration:</p>
+      <a href="${verificationLink}" style="...">Verify Email</a>
+      <p>Once verified, you can start your subscription here:</p>
+      <a href="${subscriptionLink}" style="...">Start Subscription</a>
       <p>This link expires in 24 hours.</p>
-      <p>If you didn't create this account, please ignore this email.</p>
     `
   });
 };
@@ -557,6 +522,30 @@ app.post('/api/signup', limiter, async (req, res) => {
 });
 
 
+// Service discontinuation email
+const sendDiscontinuationEmail = async (email, firstName) => {
+  try {
+    await transporter.sendMail({
+      from: `"SureTalk" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'We Miss You at SureTalk',
+      html: `
+        <h2>Hi ${firstName},</h2>
+        <p>We noticed your SureTalk service has been discontinued.</p>
+        <p>We'd love to have you back! Here's a special link to resubscribe:</p>
+        <a href="https://buy.stripe.com/bIY1806DG7qw6uk144">Resubscribe to SureTalk</a>
+        <p>If this was a mistake, please contact our support team.</p>
+      `
+    });
+    logger.info('Discontinuation email sent', { email });
+  } catch (error) {
+    logger.error('Failed to send discontinuation email', { email, error });
+  }
+};
+
+
+
+
 
 // Resend Verification Email Route
 app.get('/api/resend-verification', async (req, res) => {
@@ -605,6 +594,24 @@ app.get('/api/resend-verification', async (req, res) => {
 
 
 
+const sendWelcomeEmail = async (email, firstName) => {
+  try {
+    await transporter.sendMail({
+      from: `"SureTalk" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Welcome to SureTalk!',
+      html: `
+        <h2>Welcome to SureTalk, ${firstName}!</h2>
+        <p>Thank you for joining our community.</p>
+        <p>You can now complete your subscription to start using our services:</p>
+        <a href="https://buy.stripe.com/bIY1806DG7qw6uk144">Complete Subscription</a>
+        <p>If you have any questions, please reply to this email.</p>
+      `
+    });
+  } catch (error) {
+    logger.error('Failed to send welcome email', { email, error });
+  }
+};
 
 
 
@@ -656,124 +663,41 @@ app.get('/api/verify-email', async (req, res) => {
     logger.info('Email verification successful', { userId, email });
 
     // 5. Send success response with redirect
-    // After successful verification, send this enhanced HTML response:
+    // After successful verification, show a simple success page
     res.setHeader('Content-Type', 'text/html');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:;");
     res.send(`
       <!DOCTYPE html>
       <html>
       <head>
         <title>Email Verified</title>
-        <meta charset="UTF-8">
-        <meta http-equiv="refresh" content="10; url=https://buy.stripe.com/bIY1806DG7qw6uk144">
         <style>
-          body {
-            font-family: 'Arial', sans-serif;
-            text-align: center;
-            padding: 50px;
-            background-color: #f8f9fa;
-            color: #333;
-          }
-          .container {
-            background: white;
-            padding: 40px;
-            border-radius: 10px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-            max-width: 500px;
-            margin: 0 auto;
-          }
-          h1 {
-            color: #28a745;
-            margin-bottom: 20px;
-          }
-          .countdown {
-            font-size: 24px;
-            margin: 30px 0;
-            font-weight: bold;
-            color: #007bff;
-          }
-          .spinner {
-            border: 4px solid rgba(0, 0, 0, 0.1);
-            border-radius: 50%;
-            border-top: 4px solid #007bff;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
-          }
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-          .btn {
-            display: inline-block;
-            padding: 10px 20px;
-            background: #007bff;
-            color: white;
-            text-decoration: none;
-            border-radius: 5px;
-            margin-top: 20px;
-          }
-          .btn:hover {
-            background: #0056b3;
-          }
+          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+          .container { max-width: 500px; margin: 0 auto; }
+          h1 { color: #28a745; }
         </style>
       </head>
       <body>
         <div class="container">
-          <h1>🎉 Email Verified Successfully!</h1>
-          <p>Thank you for verifying your email address.</p>
-          
-          <div class="spinner"></div>
-          
-          <div class="countdown">
-            Redirecting in <span id="countdown">10</span> seconds...
-          </div>
-          
-          <p>You'll be automatically redirected to complete your payment.</p>
-          
-          <a href="https://buy.stripe.com/bIY1806DG7qw6uk144" class="btn">
-            Proceed Now
-          </a>
+          <h1>Email Verified Successfully!</h1>
+          <p>Thank you for verifying your email address. Please check your email for the subscription link.</p>
+          <p>You can now close this window.</p>
         </div>
-
-         <script>
-  document.addEventListener('DOMContentLoaded', function() {
-    var countdownElement = document.getElementById('countdown');
-    var seconds = 10;
-
-    function updateCountdown() {
-      seconds--;
-      if (seconds < 0) {
-        window.location.href = 'https://buy.stripe.com/bIY1806DG7qw6uk144';
-      } else {
-        countdownElement.textContent = seconds;
-        setTimeout(updateCountdown, 1000);
-      }
-    }
-
-    // Show the initial number first
-    countdownElement.textContent = seconds;
-    setTimeout(updateCountdown, 1000);
-  });
-</script>
-
       </body>
       </html>
     `);
 
+    
+  // Send welcome email
+  const user = userDoc.data();
+  await sendWelcomeEmail(user.email, user.firstName);
+
   } catch (error) {
-    logger.error('Verification failed', { 
-      error: error.message,
-      stack: error.stack,
-      token,
-      email,
-      userId
-    });
-    return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=server_error`);
+    logger.error('Verification failed', { error });
+    return res.redirect(`${process.env.FRONTEND_URL}/verification-failed`);
   }
 });
+
+
 
 // ==================== Google Auth Endpoint ====================
 app.post('/api/google-auth', async (req, res) => {
@@ -1086,7 +1010,11 @@ app.post('/api/fetch-recording', limiter, async (req, res, next) => {
                   logger.info("Recording uploaded to Firebase", { publicUrl });
 
                   // Delete temp file
-                  fs.unlinkSync(tempFilePath);
+                  try {
+                    fs.unlinkSync(tempFilePath);
+                  } catch (err) {
+                    logger.warn("Temp file already deleted or missing", { path: tempFilePath });
+                  }                
 
                   // Return Public URL
                   res.json({
