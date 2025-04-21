@@ -377,7 +377,7 @@ const sendVerificationEmail = async (email, userId) => {
   });
 
   
-  const verificationLink = `${process.env.FRONTEND_URL}/verify-email?token=${token}`;
+  const verificationLink = `${process.env.FRONTEND_URL}/confirm-email-link?token=${token}`;
   const subscriptionLink = "https://buy.stripe.com/bIY1806DG7qw6uk144"; // Stripe link
 
   await transporter.sendMail({
