@@ -624,7 +624,7 @@ app.get('/api/verify-email', async (req, res) => {
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
     if (!tokenDoc.exists) {
       logger.error('Token not found in Firestore', { token });
-      return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=invalid_token`);
+      return res.redirect(`${process.env.FRONTEND_URL}/failedEmailVerification?error=invalid_token`);
     }
 
     // 2. Extract token data
@@ -636,21 +636,21 @@ app.get('/api/verify-email', async (req, res) => {
 
     if (tokenData.used) {
       logger.warn('Token already used', { token });
-      return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=used_token`);
+      return res.redirect(`${process.env.FRONTEND_URL}/failedEmailVerification?error=used_token`);
     }
 
     let expiresAt = tokenData.expiresAt;
     if (expiresAt?.toDate) expiresAt = expiresAt.toDate();
     if (new Date() > new Date(expiresAt)) {
       logger.warn('Token expired', { token, expiresAt });
-      return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=expired_token`);
+      return res.redirect(`${process.env.FRONTEND_URL}/failedEmailVerification?error=expired_token`);
     }
 
     // 3. Verify user exists
     const userDoc = await db.collection('users').doc(userId).get();
     if (!userDoc.exists) {
       logger.error('User not found during verification', { userId });
-      return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=user_not_found`);
+      return res.redirect(`${process.env.FRONTEND_URL}/failedEmailVerification?error=user_not_found`);
     }
 
     // 4. Update records
@@ -692,7 +692,7 @@ app.get('/api/verify-email', async (req, res) => {
 
   } catch (error) {
     logger.error('Verification failed', { error });
-    return res.redirect(`${process.env.FRONTEND_URL}/verification-failed`);
+    return res.redirect(`${process.env.FRONTEND_URL}/failedEmailVerification`);
   }
 });
 
