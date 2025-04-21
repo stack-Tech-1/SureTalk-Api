@@ -617,11 +617,9 @@ const sendWelcomeEmail = async (email, firstName) => {
 
 // Email Verification Route
 app.get('/api/verify-email', async (req, res) => {
-  const { token, email, userId } = req.query;
-  
-  try {
-    logger.info('Verification attempt started', { token, email, userId });
+  const { token } = req.query;
 
+  try {
     // 1. Validate token exists
     const tokenDoc = await db.collection('verification-tokens').doc(token).get();
     if (!tokenDoc.exists) {
@@ -629,9 +627,12 @@ app.get('/api/verify-email', async (req, res) => {
       return res.redirect(`${process.env.FRONTEND_URL}/verification-failed?error=invalid_token`);
     }
 
-    // 2. Check token usage and expiration
+    // 2. Extract token data
     const tokenData = tokenDoc.data();
-    logger.debug('Token data from Firestore', tokenData);
+    const userId = tokenData.userId;
+    const email = tokenData.email;
+
+    logger.info('Verification attempt started', { token, email, userId });
 
     if (tokenData.used) {
       logger.warn('Token already used', { token });
@@ -662,8 +663,11 @@ app.get('/api/verify-email', async (req, res) => {
 
     logger.info('Email verification successful', { userId, email });
 
-    // 5. Send success response with redirect
-    // After successful verification, show a simple success page
+    // 5. Send welcome email
+    const user = userDoc.data();
+    await sendWelcomeEmail(user.email, user.firstName);
+
+    // 6. Respond with success page
     res.setHeader('Content-Type', 'text/html');
     res.send(`
       <!DOCTYPE html>
@@ -686,16 +690,12 @@ app.get('/api/verify-email', async (req, res) => {
       </html>
     `);
 
-    
-  // Send welcome email
-  const user = userDoc.data();
-  await sendWelcomeEmail(user.email, user.firstName);
-
   } catch (error) {
     logger.error('Verification failed', { error });
     return res.redirect(`${process.env.FRONTEND_URL}/verification-failed`);
   }
 });
+
 
 
 
