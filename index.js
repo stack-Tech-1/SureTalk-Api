@@ -1528,34 +1528,36 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
 
-// ========================Webhook for Stripe Events===========================
 app.post('/start-payment-setup', async (req, res) => {
   try {
     const { ProfileId, paymentMethod } = req.body;
 
     if (!ProfileId || !paymentMethod) {
+      res.set('Content-Type', 'text/xml');
       return res.send(`<Response><Say>Missing payment information.</Say></Response>`);
     }
 
-    // Attach the payment method to the customer
     const customerId = ProfileId;
     const paymentMethodId = paymentMethod;
 
+    // Attach payment method
     await stripe.paymentMethods.attach(paymentMethodId, {
       customer: customerId,
     });
 
-    // Set the default payment method
+    // Set as default
     await stripe.customers.update(customerId, {
       invoice_settings: {
         default_payment_method: paymentMethodId,
       },
     });
 
-    // Create a subscription
+    const price_id = 'your_stripe_price_id_here'; // Set your actual price ID here
+
+    // Create subscription
     const subscription = await stripe.subscriptions.create({
       customer: customerId,
-      items: [{ price: price_id }], 
+      items: [{ price: price_id }],
       payment_settings: {
         payment_method_types: ['card'],
         save_default_payment_method: 'on_subscription',
@@ -1565,12 +1567,16 @@ app.post('/start-payment-setup', async (req, res) => {
 
     console.log('✅ Subscription created:', subscription.id);
 
+    res.set('Content-Type', 'text/xml');
     res.send(`<Response><Say>Your subscription was successful. Thank you!</Say></Response>`);
   } catch (err) {
-    console.error('❌ Error:', err.message);
-    res.send(`<Response><Say>Something went wrong while processing your payment.</Say></Response>`);
+    console.error('❌ Error during subscription setup:', err);
+
+    res.set('Content-Type', 'text/xml');
+    res.send(`<Response><Say>Something went wrong while processing your payment. Please try again later.</Say></Response>`);
   }
 });
+
 
 
 // Error-handling middleware
