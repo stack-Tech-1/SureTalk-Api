@@ -1531,15 +1531,15 @@ app.use(bodyParser.json());
 // ========================Webhook for Stripe Events===========================
 app.post('/start-payment-setup', async (req, res) => {
   try {
-    const { ProfileId, PaymentToken } = req.body;
+    const { ProfileId, paymentMethod } = req.body;
 
-    if (!ProfileId || !PaymentToken) {
+    if (!ProfileId || !paymentMethod) {
       return res.send(`<Response><Say>Missing payment information.</Say></Response>`);
     }
 
     // Attach the payment method to the customer
     const customerId = ProfileId;
-    const paymentMethodId = PaymentToken;
+    const paymentMethodId = paymentMethod;
 
     await stripe.paymentMethods.attach(paymentMethodId, {
       customer: customerId,
