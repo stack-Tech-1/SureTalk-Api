@@ -1527,32 +1527,27 @@ app.post('/api/subscribe-user', async (req, res) => {
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-
-// ========================Webhook for Stripe Events===========================
 app.post('/start-payment-setup', async (req, res) => {
   try {
-    const { ProfileId, PaymentToken } = req.body;
+    const { ProfileId, PaymentMethod } = req.body;
 
-    if (!ProfileId || !PaymentToken) {
+    if (!ProfileId || !PaymentMethod) {
       return res.send(`<Response><Say>Missing payment information.</Say></Response>`);
     }
 
-    // Attach the payment method to the customer
     const customerId = ProfileId;
-    const paymentMethodId = PaymentToken;
+    const paymentMethodId = PaymentMethod;
 
     await stripe.paymentMethods.attach(paymentMethodId, {
       customer: customerId,
     });
 
-    // Set the default payment method
     await stripe.customers.update(customerId, {
       invoice_settings: {
         default_payment_method: paymentMethodId,
       },
     });
 
-    // Create a subscription
     const subscription = await stripe.subscriptions.create({
       customer: customerId,
       items: [{ price: price_id }], 
@@ -1571,6 +1566,7 @@ app.post('/start-payment-setup', async (req, res) => {
     res.send(`<Response><Say>Something went wrong while processing your payment.</Say></Response>`);
   }
 });
+
 
 
 // Error-handling middleware
