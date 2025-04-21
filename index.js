@@ -1552,7 +1552,7 @@ app.post('/start-payment-setup', async (req, res) => {
       },
     });
 
-    const price_id = 'your_stripe_price_id_here'; // Set your actual price ID here
+    const price_id = 'price_1RFBXvAOy2W6vlFokwIELKQX'; 
 
     // Create subscription
     const subscription = await stripe.subscriptions.create({
