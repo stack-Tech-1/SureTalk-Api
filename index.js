@@ -1530,34 +1530,29 @@ app.use(bodyParser.json());
 
 app.post('/start-payment-setup', async (req, res) => {
   try {
-    const { ProfileId, paymentMethod } = req.body;
+    const { ProfileId, PaymentToken } = req.body; // <-- Now using PaymentToken (Stripe PaymentMethod ID)
 
-    if (!ProfileId || !paymentMethod) {
+    if (!ProfileId || !PaymentToken) {
       res.set('Content-Type', 'text/xml');
       return res.send(`<Response><Say>Missing payment information.</Say></Response>`);
     }
 
-    const customerId = ProfileId;
-    const paymentMethodId = paymentMethod;
-
-    // Attach payment method
-    await stripe.paymentMethods.attach(paymentMethodId, {
-      customer: customerId,
+    // Attach the PaymentMethod to the Customer (if not already attached)
+    await stripe.paymentMethods.attach(PaymentToken, {
+      customer: ProfileId,
     });
 
-    // Set as default
-    await stripe.customers.update(customerId, {
+    // Set as default payment method
+    await stripe.customers.update(ProfileId, {
       invoice_settings: {
-        default_payment_method: paymentMethodId,
+        default_payment_method: PaymentToken,
       },
     });
 
-    const price_id = 'price_1RFBXvAOy2W6vlFokwIELKQX'; 
-
     // Create subscription
     const subscription = await stripe.subscriptions.create({
-      customer: customerId,
-      items: [{ price: price_id }],
+      customer: ProfileId,
+      items: [{ price: 'price_1RFBXvAOy2W6vlFokwIELKQX' }],
       payment_settings: {
         payment_method_types: ['card'],
         save_default_payment_method: 'on_subscription',
@@ -1570,10 +1565,9 @@ app.post('/start-payment-setup', async (req, res) => {
     res.set('Content-Type', 'text/xml');
     res.send(`<Response><Say>Your subscription was successful. Thank you!</Say></Response>`);
   } catch (err) {
-    console.error('❌ Error during subscription setup:', err);
-
+    console.error('❌ Error:', err.message);
     res.set('Content-Type', 'text/xml');
-    res.send(`<Response><Say>Something went wrong while processing your payment. Please try again later.</Say></Response>`);
+    res.send(`<Response><Say>Payment failed. Please try again later.</Say></Response>`);
   }
 });
 
