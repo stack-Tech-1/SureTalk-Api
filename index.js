@@ -1581,26 +1581,6 @@ app.post('/start-payment-setup', async (req, res) => {
   }
 });
 
-app.post('/studio-redirect', (req, res) => {
-  const { success, error, CallSid } = req.query;
-  const twiml = new Twilio.twiml.VoiceResponse();
-
-  if (success) {
-    twiml.say("Thank you for your payment!");
-  } else {
-    twiml.say(error === 'card_declined' 
-      ? "Your card was declined. Please try another payment method." 
-      : "We couldn't process your payment. Please try again later.");
-  }
-
-  twiml.redirect({
-    method: 'POST'
-  }, `https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}`);
-
-  res.type('text/xml');
-  res.send(twiml.toString());
-});
-
 
 // Error-handling middleware
 app.use((err, req, res, next) => {
