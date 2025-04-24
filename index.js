@@ -1524,35 +1524,31 @@ app.post('/api/subscribe-user', async (req, res) => {
 });
 
 
+
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-
 app.post('/start-payment-setup', async (req, res) => {
   try {
-    const { PaymentToken } = req.body; 
+    const { PaymentToken, CallSid, Result } = req.body;
 
-    if (!PaymentToken) {
-      res.set('Content-Type', 'text/xml');
-      return res.send(`<Response><Say>Missing payment token.</Say></Response>`);
+    // Validate payment was successful
+    if (Result !== 'success' || !PaymentToken) {
+      throw new Error('Payment failed or token missing');
     }
 
-    // Create a new Stripe Customer
+    // Process Stripe subscription
     const customer = await stripe.customers.create();
-
-    // Attach the PaymentMethod to the Customer
     await stripe.paymentMethods.attach(PaymentToken, {
       customer: customer.id,
     });
 
-    // Set as default payment method
     await stripe.customers.update(customer.id, {
       invoice_settings: {
         default_payment_method: PaymentToken,
       },
     });
 
-    // Create subscription
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
       items: [{ price: 'price_1RFBXvAOy2W6vlFokwIELKQX' }],
@@ -1560,28 +1556,27 @@ app.post('/start-payment-setup', async (req, res) => {
         payment_method_types: ['card'],
         save_default_payment_method: 'on_subscription',
       },
-      expand: ['latest_invoice.payment_intent'],
     });
 
     console.log('✅ Subscription created for customer:', customer.id);
 
-    // Redirect back to Twilio Studio flow    
+    // TwiML continues the Studio flow
     res.set('Content-Type', 'text/xml');
     res.send(`
       <Response>
-        <Say>Payment processed successfully. Your subscription is now active.</Say>
-        <Redirect method="POST">https://handler.twilio.com/twiml/EHXXXXXXXXXXXXXXXXXXXX?CallSid=${CallSid}</Redirect>
+        <Say>Thank you! Your payment was processed successfully.</Say>
+        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}</Redirect>
       </Response>
     `);
 
   } catch (err) {
     console.error('Payment processing error:', err);
-
+    
     res.set('Content-Type', 'text/xml');
     res.send(`
       <Response>
         <Say>We encountered an error processing your payment. Please try again later.</Say>
-        <Redirect method="POST">https://handler.twilio.com/twiml/EHXXXXXXXXXXXXXXXXXXXX?CallSid=${req.body.CallSid}</Redirect>
+        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?payment_error=1</Redirect>
       </Response>
     `);
   }
