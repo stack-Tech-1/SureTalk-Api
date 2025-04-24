@@ -1530,7 +1530,7 @@ app.use(bodyParser.json());
 
 app.post('/start-payment-setup', async (req, res) => {
   try {
-    const { PaymentToken, CallSid, Result } = req.body;
+    const { PaymentToken, CallSid, Result, Called, Caller, CallStatus, ...otherParams } = req.body;
 
     // Validate payment was successful
     if (Result !== 'success' || !PaymentToken) {
@@ -1551,7 +1551,7 @@ app.post('/start-payment-setup', async (req, res) => {
 
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
-      items: [{ price: 'price_1RFBXvAOy2W6vlFokwIELKQX' }],
+      items: [{ price: process.env.STRIPE_MONTHLY_PRICE_ID }],
       payment_settings: {
         payment_method_types: ['card'],
         save_default_payment_method: 'on_subscription',
@@ -1560,23 +1560,45 @@ app.post('/start-payment-setup', async (req, res) => {
 
     console.log('✅ Subscription created for customer:', customer.id);
 
-    // TwiML continues the Studio flow
+    // Prepare all original call parameters to send back to Studio
+    const studioParams = new URLSearchParams();
+    studioParams.append('CallSid', CallSid);
+    studioParams.append('Called', Called);
+    studioParams.append('Caller', Caller);
+    studioParams.append('CallStatus', CallStatus);
+    studioParams.append('PaymentToken', PaymentToken);
+    studioParams.append('PaymentResult', 'success');
+    
+    // Add all other original parameters
+    Object.entries(otherParams).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        studioParams.append(key, value);
+      }
+    });
+
+    // TwiML to continue the Studio flow with all original parameters
     res.set('Content-Type', 'text/xml');
     res.send(`
       <Response>
-        <Say>Thank you! Your payment was processed successfully.</Say>
-        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}</Redirect>
+        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?${studioParams.toString()}</Redirect>
       </Response>
     `);
 
   } catch (err) {
     console.error('Payment processing error:', err);
     
+    // Prepare error response with original call parameters
+    const studioParams = new URLSearchParams();
+    studioParams.append('CallSid', req.body.CallSid || '');
+    studioParams.append('Called', req.body.Called || '');
+    studioParams.append('Caller', req.body.Caller || '');
+    studioParams.append('CallStatus', req.body.CallStatus || 'in-progress');
+    studioParams.append('PaymentError', err.message);
+    
     res.set('Content-Type', 'text/xml');
     res.send(`
       <Response>
-        <Say>We encountered an error processing your payment. Please try again later.</Say>
-        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?payment_error=1</Redirect>
+        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?${studioParams.toString()}</Redirect>
       </Response>
     `);
   }
