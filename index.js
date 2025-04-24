@@ -1533,7 +1533,7 @@ app.post('/start-payment-setup', async (req, res) => {
     const { PaymentToken, CallSid, Result } = req.body;
 
     // Validate payment was successful
-    if (Result !== 'completed' || !PaymentToken) {
+    if (Result !== 'success' || !PaymentToken) {
       throw new Error('Payment failed or token missing');
     }
 
