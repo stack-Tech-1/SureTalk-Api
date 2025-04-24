@@ -1525,71 +1525,108 @@ app.post('/api/subscribe-user', async (req, res) => {
 
 
 
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
-
-
 app.post('/start-payment-setup', async (req, res) => {
   try {
-    const { PaymentToken, CallSid, Result } = req.body;
-
-    // Validate payment was successful
-    if (Result !== 'success' || !PaymentToken) {
-      throw new Error('Payment failed or token missing');
+    // 1. Extract and validate required parameters
+    const { PaymentToken, CallSid, Called, Caller, AccountSid, Result } = req.body;
+    
+    if (!PaymentToken || !CallSid || Result !== 'success') {
+      throw new Error('Invalid payment parameters');
     }
 
-    // Process Stripe subscription
-    const customer = await stripe.customers.create();
-    await stripe.paymentMethods.attach(PaymentToken, {
-      customer: customer.id,
-    });
+    // 2. Process Stripe payment (with error handling)
+    let customer, subscription;
+    try {
+      // Create customer with metadata
+      customer = await stripe.customers.create({
+        metadata: { 
+          callSid: CallSid,
+          twilioAccount: AccountSid
+        }
+      });
 
-    await stripe.customers.update(customer.id, {
-      invoice_settings: {
-        default_payment_method: PaymentToken,
-      },
-    });
+      // Attach payment method
+      await stripe.paymentMethods.attach(PaymentToken, {
+        customer: customer.id
+      });
 
-    const subscription = await stripe.subscriptions.create({
-      customer: customer.id,
-      items: [{ price: process.env.STRIPE_MONTHLY_PRICE_ID }], // Use env var
-      payment_settings: {
-        payment_method_types: ['card'],
-        save_default_payment_method: 'on_subscription',
-      },
-    });
+      // Set as default payment method
+      await stripe.customers.update(customer.id, {
+        invoice_settings: {
+          default_payment_method: PaymentToken
+        }
+      });
 
-    console.log('Subscription created:', subscription.id);
+      // Create subscription
+      subscription = await stripe.subscriptions.create({
+        customer: customer.id,
+        items: [{ price: process.env.STRIPE_MONTHLY_PRICE_ID }],
+        payment_settings: {
+          payment_method_types: ['card'],
+          save_default_payment_method: 'on_subscription'
+        }
+      });
 
-    // Immediate redirect with success status
-    const params = new URLSearchParams({
-      CallSid,
-      PaymentStatus: 'success',
-      StripeCustomerId: customer.id
-    });
+      console.log(`✅ Created subscription ${subscription.id} for customer ${customer.id}`);
+    } catch (stripeError) {
+      console.error('Stripe processing failed:', stripeError);
+      throw new Error(`Payment processing failed: ${stripeError.message}`);
+    }
 
-    res.set('Content-Type', 'text/xml');
-    res.send(`
-      <Response>
-        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?${params}</Redirect>
-      </Response>
-    `);
-
-  } catch (err) {
-    console.error('Payment error:', err);
+    // 3. Prepare Studio continuation with ALL original parameters
+    const studioParams = new URLSearchParams();
     
-    const params = new URLSearchParams({
-      CallSid: req.body.CallSid || '',
-      PaymentStatus: 'failed',
-      ErrorCode: err.code || 'payment_failed'
+    // Add all original parameters
+    Object.entries(req.body).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        studioParams.append(key, value.toString());
+      }
     });
+    
+    // Add our success indicators
+    studioParams.append('PaymentStatus', 'success');
+    studioParams.append('StripeCustomerId', customer.id);
+    studioParams.append('StripeSubscriptionId', subscription.id);
+
+    // 4. Return proper TwiML response
+    const redirectUrl = `https://webhooks.twilio.com/v1/Accounts/${AccountSid}/Flows/${process.env.STUDIO_FLOW_SID}?${studioParams.toString()}`;
+    
+    const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+      <Response>
+        <Redirect method="POST">${redirectUrl}</Redirect>
+      </Response>`;
 
     res.set('Content-Type', 'text/xml');
-    res.send(`
+    res.send(twimlResponse);
+
+  } catch (error) {
+    console.error('Payment endpoint error:', error);
+
+    // 5. Prepare error response with original parameters
+    const errorParams = new URLSearchParams();
+    
+    // Preserve original call parameters
+    Object.entries(req.body).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && 
+          ['CallSid', 'Called', 'Caller', 'AccountSid'].includes(key)) {
+        errorParams.append(key, value.toString());
+      }
+    });
+    
+    // Add error information
+    errorParams.append('PaymentStatus', 'failed');
+    errorParams.append('ErrorCode', error.code || 'payment_error');
+    errorParams.append('ErrorMessage', error.message.substring(0, 160)); // Truncate long messages
+
+    const errorUrl = `https://webhooks.twilio.com/v1/Accounts/${req.body.AccountSid || process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?${errorParams.toString()}`;
+    
+    const errorTwiml = `<?xml version="1.0" encoding="UTF-8"?>
       <Response>
-        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?${params}</Redirect>
-      </Response>
-    `);
+        <Redirect method="POST">${errorUrl}</Redirect>
+      </Response>`;
+
+    res.set('Content-Type', 'text/xml');
+    res.send(errorTwiml);
   }
 });
 
