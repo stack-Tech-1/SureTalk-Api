@@ -1525,6 +1525,10 @@ app.post('/api/subscribe-user', async (req, res) => {
 
 
 
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
+
+
 app.post('/start-payment-setup', async (req, res) => {
   try {
     const { PaymentToken, CallSid, Result } = req.body;
