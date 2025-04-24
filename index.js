@@ -1565,22 +1565,23 @@ app.post('/start-payment-setup', async (req, res) => {
 
     console.log('✅ Subscription created for customer:', customer.id);
 
-    // Redirect back to Twilio Studio flow
+    // Redirect back to Twilio Studio flow    
     res.set('Content-Type', 'text/xml');
     res.send(`
       <Response>
-        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return&amp;success=true</Redirect>
+        <Say>Payment processed successfully. Your subscription is now active.</Say>
+        <Redirect method="POST">https://handler.twilio.com/twiml/EHXXXXXXXXXXXXXXXXXXXX?CallSid=${CallSid}</Redirect>
       </Response>
     `);
 
   } catch (err) {
     console.error('Payment processing error:', err);
 
-    // Redirect back to flow with error status
     res.set('Content-Type', 'text/xml');
     res.send(`
       <Response>
-        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return&amp;success=false</Redirect>
+        <Say>We encountered an error processing your payment. Please try again later.</Say>
+        <Redirect method="POST">https://handler.twilio.com/twiml/EHXXXXXXXXXXXXXXXXXXXX?CallSid=${req.body.CallSid}</Redirect>
       </Response>
     `);
   }
