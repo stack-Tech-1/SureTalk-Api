@@ -1537,22 +1537,22 @@ app.post('/start-payment-setup', async (req, res) => {
       return res.send(`<Response><Say>Missing payment token.</Say></Response>`);
     }
 
-    // 1. Create a new Stripe Customer
+    // Create a new Stripe Customer
     const customer = await stripe.customers.create();
 
-    // 2. Attach the PaymentMethod to the Customer
+    // Attach the PaymentMethod to the Customer
     await stripe.paymentMethods.attach(PaymentToken, {
       customer: customer.id,
     });
 
-    // 3. Set as default payment method
+    // Set as default payment method
     await stripe.customers.update(customer.id, {
       invoice_settings: {
         default_payment_method: PaymentToken,
       },
     });
 
-    // 4. Create subscription
+    // Create subscription
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
       items: [{ price: 'price_1RFBXvAOy2W6vlFokwIELKQX' }],
@@ -1565,19 +1565,24 @@ app.post('/start-payment-setup', async (req, res) => {
 
     console.log('✅ Subscription created for customer:', customer.id);
 
+    // Redirect back to Twilio Studio flow
     res.set('Content-Type', 'text/xml');
-    res.send(`<Response><Say>Subscription activated! Thank you.</Say></Response>`);
+    res.send(`
+      <Response>
+        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return&amp;success=true</Redirect>
+      </Response>
+    `);
 
   } catch (err) {
-    console.error('❌ Stripe Error:', err.message);
+    console.error('Payment processing error:', err);
 
-    let errorMessage = "Payment failed. Please try again later.";
-    if (err.type === 'StripeCardError') {
-      errorMessage = "Your card was declined. Please try another card.";
-    }
-
+    // Redirect back to flow with error status
     res.set('Content-Type', 'text/xml');
-    res.send(`<Response><Say>${errorMessage}</Say></Response>`);
+    res.send(`
+      <Response>
+        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return&amp;success=false</Redirect>
+      </Response>
+    `);
   }
 });
 
