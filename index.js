@@ -1562,25 +1562,24 @@ app.post('/start-payment-setup', async (req, res) => {
     console.log('✅ Subscription created for customer:', customer.id);
 
        // TwiML continues the Studio flow
-    res.set('Content-Type', 'text/xml');
-    res.send(`
-      <Response>
-        <Say>Thank you! Your payment was processed successfully.</Say>
-        <Redirect method="POST">https://studio.twilio.com/v2/Flows/${process.env.STUDIO_FLOW_SID}/Executions/${CallSid}</Redirect>
-      </Response>
-    `);
-
-  } catch (err) {
-    console.error('Payment processing error:', err);
-    
-    res.set('Content-Type', 'text/xml');
-    res.send(`
-      <Response>
-        <Say>We encountered an error processing your payment. Please try again later.</Say>
-        <Redirect method="POST">https://studio.twilio.com/v2/Flows/${process.env.STUDIO_FLOW_SID}/Executions/${CallSid}</Redirect>
-      </Response>
-    `);
-  }
+       res.set('Content-Type', 'text/xml');
+       res.send(`
+         <Response>
+           <Say>Thank you! Your payment was processed successfully.</Say>
+           <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}/Executions/${CallSid}</Redirect>
+         </Response>
+       `);
+   
+     } catch (err) {
+       console.error('Payment processing error:', err);
+       res.set('Content-Type', 'text/xml');
+       res.send(`
+         <Response>
+           <Say>We encountered an error processing your payment. Please try again later.</Say>
+           <Hangup/>
+         </Response>
+       `);
+     }
 });
 
 
