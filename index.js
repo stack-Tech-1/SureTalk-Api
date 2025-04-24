@@ -1529,31 +1529,23 @@ app.use(bodyParser.json());
 
 
 app.post('/start-payment-setup', async (req, res) => {
-  const twiml = new Twilio.twiml.VoiceResponse();
-  
   try {
-    const { PaymentToken, CallSid } = req.body;
+    const { PaymentToken } = req.body; 
 
-    // Validate payment token
     if (!PaymentToken) {
-      twiml.say("Missing payment information. Please try again.");
-      twiml.redirect({
-        method: 'POST'
-      }, `/studio-redirect?error=missing_token&CallSid=${CallSid}`);
-      return res.type('text/xml').send(twiml.toString());
+      res.set('Content-Type', 'text/xml');
+      return res.send(`<Response><Say>Missing payment token.</Say></Response>`);
     }
 
-    // 1. Create Stripe customer
-    const customer = await stripe.customers.create({
-      metadata: { twilioCallSid: CallSid } // Track call in Stripe
-    });
+    // 1. Create a new Stripe Customer
+    const customer = await stripe.customers.create();
 
-    // 2. Attach payment method
+    // 2. Attach the PaymentMethod to the Customer
     await stripe.paymentMethods.attach(PaymentToken, {
       customer: customer.id,
     });
 
-    // 3. Set default payment method
+    // 3. Set as default payment method
     await stripe.customers.update(customer.id, {
       invoice_settings: {
         default_payment_method: PaymentToken,
@@ -1563,55 +1555,44 @@ app.post('/start-payment-setup', async (req, res) => {
     // 4. Create subscription
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
-      items: [{ price: process.env.STRIPE_PRICE_ID }], 
+      items: [{ price: 'price_1RFBXvAOy2W6vlFokwIELKQX' }],
       payment_settings: {
         payment_method_types: ['card'],
         save_default_payment_method: 'on_subscription',
       },
       expand: ['latest_invoice.payment_intent'],
-      metadata: { twilioCallSid: CallSid }
     });
 
     console.log('✅ Subscription created for customer:', customer.id);
 
-    // Success path - continue flow
-    twiml.say("Payment processed successfully. One moment while we continue.");
-    twiml.redirect({
-      method: 'POST'
-    }, `/studio-redirect?success=1&CallSid=${CallSid}`);
+    res.set('Content-Type', 'text/xml');
+    res.send(`<Response><Say>Subscription activated! Thank you.</Say></Response>`);
 
   } catch (err) {
     console.error('❌ Stripe Error:', err.message);
-    
-    // Error path - return to flow with error context
-    twiml.say("We encountered an error processing your payment.");
-    twiml.redirect({
-      method: 'POST'
-    }, `/studio-redirect?error=${encodeURIComponent(err.type)}&CallSid=${CallSid}`);
-  }
 
-  res.type('text/xml');
-  res.send(twiml.toString());
+    let errorMessage = "Payment failed. Please try again later.";
+    if (err.type === 'StripeCardError') {
+      errorMessage = "Your card was declined. Please try another card.";
+    }
+
+    res.set('Content-Type', 'text/xml');
+    res.send(`<Response><Say>${errorMessage}</Say></Response>`);
+  }
 });
 
-// to handle Studio redirects
 app.post('/studio-redirect', (req, res) => {
   const { success, error, CallSid } = req.query;
   const twiml = new Twilio.twiml.VoiceResponse();
 
   if (success) {
-    // Add any post-payment logic here
-    twiml.say("Completing your setup...");
+    twiml.say("Thank you for your payment!");
   } else {
-    // Handle specific error cases
-    if (error === 'card_declined') {
-      twiml.say("Your card was declined. Please try another payment method.");
-    } else {
-      twiml.say("We couldn't process your payment. Please try again later.");
-    }
+    twiml.say(error === 'card_declined' 
+      ? "Your card was declined. Please try another payment method." 
+      : "We couldn't process your payment. Please try again later.");
   }
 
-  // returns control to Studio flow
   twiml.redirect({
     method: 'POST'
   }, `https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}`);
@@ -1619,7 +1600,6 @@ app.post('/studio-redirect', (req, res) => {
   res.type('text/xml');
   res.send(twiml.toString());
 });
-
 
 
 // Error-handling middleware
