@@ -1564,7 +1564,10 @@ app.post('/start-payment-setup', async (req, res) => {
       // TwiML continues the Studio flow
       res.set('Content-Type', 'text/xml');
       res.send(`
-        <Response></Response>
+        <Response>
+          <Say>Thank you! Your payment was processed successfully.</Say>
+          <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return&amp;foo=bar</Redirect>
+        </Response>
       `);
 
     } catch (err) {
@@ -1572,7 +1575,10 @@ app.post('/start-payment-setup', async (req, res) => {
       
       res.set('Content-Type', 'text/xml');
       res.send(`
-        <Response></Response>
+        <Response>
+          <Say>We encountered an error processing your payment. Please try again later.</Say>
+          <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return&amp;foo=bar</Redirect>
+        </Response>
       `);
     }
 });
