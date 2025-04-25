@@ -1566,7 +1566,7 @@ app.post('/start-payment-setup', async (req, res) => {
        res.send(`
          <Response>
            <Say>Thank you! Your payment was processed successfully.</Say>
-           <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return</Redirect>
+           <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return&CallSid=${CallSid}</Redirect>
          </Response>
        `);
    
