@@ -1563,12 +1563,13 @@ app.post('/start-payment-setup', async (req, res) => {
 
        // TwiML continues the Studio flow
        res.set('Content-Type', 'text/xml');
-       res.send(`
-         <Response>
-           <Say>Thank you! Your payment was processed successfully.</Say>
-           <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return&CallSid=${CallSid}</Redirect>
-         </Response>
-       `);
+res.send(`
+  <Response>
+    <Say>Thank you! Your payment was processed successfully.</Say>
+    <Redirect method="POST">https://handler.twilio.com/twiml/EHfb82d383e0d0b7738910d565977081cb</Redirect>
+  </Response>
+`);
+
    
      } catch (err) {
        console.error('Payment processing error:', err);
