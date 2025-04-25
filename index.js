@@ -1563,21 +1563,18 @@ app.post('/start-payment-setup', async (req, res) => {
 
        // TwiML continues the Studio flow
        res.set('Content-Type', 'text/xml');
-res.send(`
-  <Response>
-    <Say>Thank you! Your payment was processed successfully.</Say>
-    <Redirect method="POST">https://handler.twilio.com/twiml/EHfb82d383e0d0b7738910d565977081cb</Redirect>
-  </Response>
-`);
-
+       res.send(`
+         <Response>
+           <Say>Thank you! Your payment was processed successfully.</Say>           
+         </Response>
+       `);
    
      } catch (err) {
        console.error('Payment processing error:', err);
        res.set('Content-Type', 'text/xml');
        res.send(`
          <Response>
-           <Say>We encountered an error processing your payment. Please try again later.</Say>
-           <Hangup/>
+           <Say>We encountered an error processing your payment. Please try again later.</Say>           
          </Response>
        `);
      }
