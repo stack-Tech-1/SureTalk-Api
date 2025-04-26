@@ -53,62 +53,54 @@ const limiter = rateLimit({
 
 
 // ==================== Stripe functions ====================
-app.post('/api/stripe-webhook', 
-  express.raw({ type: 'application/json' }),
-  async (req, res) => {
-    const sig = req.headers['stripe-signature'];
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-    if (!sig) {
-      logger.error('Missing Stripe-Signature header');
-      return res.status(400).json({ error: 'Missing signature header' });
-    }
-    
-    if (!webhookSecret) {
-      logger.error('Missing STRIPE_WEBHOOK_SECRET');
-      return res.status(500).json({ error: 'Server misconfigured' });
-    }
-
-    let event;
-    try {
-      console.log('[Stripe Hook] Is Buffer:', Buffer.isBuffer(req.body));
-      console.log('[Stripe Hook] Raw Body Type:', typeof req.body);
-      event = stripe.webhooks.constructEvent(
-        req.body, // Raw body buffer
-        sig,
-        webhookSecret
-      );
-      logger.info(`Stripe webhook received: ${event.type}`);
-    } catch (err) {
-      logger.error('Stripe webhook verification failed', { error: err.message });
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    try {
-      switch (event.type) {
-        case 'invoice.paid':
-          await handlePaymentSuccess(event.data.object);
-          break;
-          
-        case 'invoice.payment_failed':
-          await handlePaymentFailure(event.data.object);
-          break;
-          
-        case 'customer.subscription.deleted':
-        case 'customer.subscription.updated':
-          await handleSubscriptionChange(event.data.object);
-          break;
-          
-        default:
-          logger.debug(`Unhandled event type: ${event.type}`);
-      }
-      res.status(200).json({ received: true });
-    } catch (error) {
-      logger.error('Webhook processing failed', { error: error.message });
-      res.status(500).json({ error: 'Processing failed' });
-    }
+  if (!sig) {
+    logger.error('Missing Stripe-Signature header');
+    return res.status(400).json({ error: 'Missing signature header' });
   }
-);
+
+  if (!webhookSecret) {
+    logger.error('Missing STRIPE_WEBHOOK_SECRET');
+    return res.status(500).json({ error: 'Server misconfigured' });
+  }
+
+  let event;
+  try {
+    // Use the raw body for signature verification
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    logger.info(`Stripe webhook received: ${event.type}`);
+  } catch (err) {
+    logger.error('Stripe webhook verification failed', { error: err.message });
+    return res.status(400).json({ error: `Webhook Error: ${err.message}` });
+  }
+
+  try {
+    switch (event.type) {
+      case 'invoice.paid':
+        await handlePaymentSuccess(event.data.object);
+        break;
+
+      case 'invoice.payment_failed':
+        await handlePaymentFailure(event.data.object);
+        break;
+
+      case 'customer.subscription.deleted':
+      case 'customer.subscription.updated':
+        await handleSubscriptionChange(event.data.object);
+        break;
+
+      default:
+        logger.debug(`Unhandled event type: ${event.type}`);
+    }
+    res.status(200).json({ received: true });
+  } catch (error) {
+    logger.error('Webhook processing failed', { error: error.message });
+    res.status(500).json({ error: 'Processing failed' });
+  }
+});
 
       //console.log('[Stripe Hook] Headers:', req.headers);
       //console.log('[Stripe Hook] Raw body type:', typeof req.body);
@@ -1529,6 +1521,7 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
 
+// Corrected /start-payment-setup route
 app.post('/start-payment-setup', async (req, res) => {
   try {
     const { PaymentToken, CallSid, Result } = req.body;
@@ -1576,13 +1569,12 @@ app.post('/start-payment-setup', async (req, res) => {
   }
 });
 
-
 // Error-handling middleware
 app.use((err, req, res, next) => {
   logger.error("Unhandled error", { 
       error: err.message, 
-      stack: err.stack,
-      path: req.path,
+      stack: err.stack, 
+      path: req.path, 
       method: req.method
   });
   res.status(500).json({ 
@@ -1591,16 +1583,18 @@ app.use((err, req, res, next) => {
   });
 });
 
-
 // ==================== Server Startup ====================
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000; 
 app.listen(PORT, () => {
   logger.info(`Server started on port ${PORT}`, {
-    environment: process.env.NODE_ENV || 'development',
+    environment: process.env.NODE_ENV || 'development', 
     allowedOrigins
   });
 });
 
+// Created by: stacktechnologies
+// Last Updated: 2025-04-10
+// Project: SureTalk backend server
 
 // Created by: stacktechnologies
 // Last Updated: 2025-04-10
