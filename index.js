@@ -1540,14 +1540,9 @@ app.post('/start-payment-setup', async (req, res) => {
 
     // Process Stripe subscription
     const customer = await stripe.customers.create();
-    await stripe.paymentMethods.attach(PaymentToken, {
-      customer: customer.id,
-    });
-
+    await stripe.paymentMethods.attach(PaymentToken, { customer: customer.id });
     await stripe.customers.update(customer.id, {
-      invoice_settings: {
-        default_payment_method: PaymentToken,
-      },
+      invoice_settings: { default_payment_method: PaymentToken },
     });
 
     const subscription = await stripe.subscriptions.create({
@@ -1561,25 +1556,24 @@ app.post('/start-payment-setup', async (req, res) => {
 
     console.log('✅ Subscription created for customer:', customer.id);
 
-       // TwiML continues the Studio flow
-       res.set('Content-Type', 'text/xml');
-       res.send(`
-         <Response>
-           <Say>Thank you! Your payment was processed successfully.</Say>           
-           <Redirect method="POST">https://pay-with-stripe-action-url-5617.twil.io/start-payment-setup/resume-flow</Redirect>
-         </Response>
-       `);
-   
-     } catch (err) {
-       console.error('Payment processing error:', err);
-       res.set('Content-Type', 'text/xml');
-       res.send(`
-         <Response>
-           <Say>We encountered an error processing your payment. Please try again later.</Say>
-           <Hangup/>
-         </Response>
-       `);
-     }
+    // Redirect back to Twilio Studio Flow
+    res.set('Content-Type', 'text/xml');
+    res.send(`
+      <Response>
+        <Say>Thank you! Your payment was processed successfully.</Say>
+        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return&CallSid=${CallSid}</Redirect>
+      </Response>
+    `);
+  } catch (err) {
+    console.error('Payment processing error:', err);
+    res.set('Content-Type', 'text/xml');
+    res.send(`
+      <Response>
+        <Say>We encountered an error processing your payment. Please try again later.</Say>
+        <Hangup/>
+      </Response>
+    `);
+  }
 });
 
 
