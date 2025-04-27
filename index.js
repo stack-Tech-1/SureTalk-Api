@@ -1562,9 +1562,10 @@ res.send(twiml.toString());
 // Payment processing endpoint
 app.post('/start-payment-setup', async (req, res) => {
   try {
-    console.log('Payment webhook received:', req.body); 
+    console.log('Payment webhook received:', req.body);
     
-    const { PaymentToken, Result } = req.body;
+    const { PaymentToken, Result, FlowSid, FlowExecutionSid } = req.body;
+    
     if (Result !== 'success' || !PaymentToken) {
       throw new Error(`Payment failed - Result: ${Result}, Token: ${!!PaymentToken}`);
     }
@@ -1588,12 +1589,25 @@ app.post('/start-payment-setup', async (req, res) => {
     console.log('✅ Subscription created for:', customer.id);
 
     // TwiML response
-    res.type('text/xml').send(`
-      <Response>
-        <Say>Thank you! Your payment was processed successfully.</Say>
-        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return</Redirect>
-      </Response>
-    `);
+    const twiml = new Twilio.twiml.VoiceResponse();
+    twiml.say("Thank you! Your payment was processed successfully.");
+    
+    // Use the FlowSid from the request if available, fallback to env var
+    const flowSid = FlowSid || process.env.STUDIO_FLOW_SID;
+    
+    if (FlowExecutionSid) {
+      // If we have execution context, use the execution-aware return URL
+      twiml.redirect({
+        method: 'POST'
+      }, `https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${flowSid}/Executions/${FlowExecutionSid}`);
+    } else {
+      // Fallback to simple return (may not work as well)
+      twiml.redirect({
+        method: 'POST'
+      }, `https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${flowSid}?FlowEvent=return`);
+    }
+
+    res.type('text/xml').send(twiml.toString());
 
   } catch (err) {
     console.error('❌ Payment processing failed:', err);
