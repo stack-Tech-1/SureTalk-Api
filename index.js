@@ -1548,7 +1548,7 @@ app.post('/twilio-payment-handler', (req, res) => {
       paymentConnector: "Stripe_Connector_2",
       tokenType: "payment-method",
       postalCode: false,
-      action: "https://callpaymentsetup.onrender.com/start-payment-setup" 
+      action: "https://suretalk-api.onrender.com/start-payment-setup" 
     });
 
     res.type('text/xml');
@@ -1591,7 +1591,7 @@ app.post('/start-payment-setup', async (req, res) => {
     res.type('text/xml').send(`
       <Response>
         <Say>Thank you! Your payment was processed successfully.</Say>
-        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.T_STUDIO_FLOW_SID}?FlowEvent=return</Redirect>
+        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return</Redirect>
       </Response>
     `);
 
