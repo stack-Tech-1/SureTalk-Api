@@ -19,6 +19,8 @@ const path = require('path');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const price_id = process.env.STRIPE_PRICE_ID;
 const bodyParser = require('body-parser');
+const Twilio = require('twilio'); 
+
 
 // ==================== Initialize Express ====================
 const app = express();
@@ -1523,63 +1525,85 @@ app.post('/api/subscribe-user', async (req, res) => {
   }
 });
 
+// Verify environment variables
+const requiredVars = ['STRIPE_SECRET_KEY', 'TWILIO_ACCOUNT_SID', 'STUDIO_FLOW_SID'];
+for (const varName of requiredVars) {
+  if (!process.env[varName]) {
+    console.error(`❌ Missing required environment variable: ${varName}`);
+    process.exit(1);
+  }
+}
 
-
+// Middleware
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
+// Twilio endpoint
+app.post('/twilio-payment-handler', (req, res) => {
+  try {
+    const twiml = new Twilio.twiml.VoiceResponse();
+    
+    twiml.say("We are saving your card for future monthly payments.");
+    twiml.pay({
+      paymentConnector: "Stripe_Connector_2",
+      tokenType: "payment-method",
+      postalCode: false,
+      action: "https://callpaymentsetup.onrender.com/start-payment-setup" 
+    });
 
+    res.type('text/xml');
+res.send(twiml.toString());
+  } catch (err) {
+    console.error('Twilio handler error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+// Payment processing endpoint
 app.post('/start-payment-setup', async (req, res) => {
   try {
-    const { PaymentToken, CallSid, Result } = req.body;
-
-    // Validate payment was successful
+    console.log('Payment webhook received:', req.body); 
+    
+    const { PaymentToken, Result } = req.body;
     if (Result !== 'success' || !PaymentToken) {
-      throw new Error('Payment failed or token missing');
+      throw new Error(`Payment failed - Result: ${Result}, Token: ${!!PaymentToken}`);
     }
 
     // Process Stripe subscription
     const customer = await stripe.customers.create();
-    await stripe.paymentMethods.attach(PaymentToken, {
-      customer: customer.id,
-    });
-
+    await stripe.paymentMethods.attach(PaymentToken, { customer: customer.id });
     await stripe.customers.update(customer.id, {
-      invoice_settings: {
-        default_payment_method: PaymentToken,
-      },
+      invoice_settings: { default_payment_method: PaymentToken }
     });
 
-    const subscription = await stripe.subscriptions.create({
+    await stripe.subscriptions.create({
       customer: customer.id,
       items: [{ price: 'price_1RFBXvAOy2W6vlFokwIELKQX' }],
       payment_settings: {
         payment_method_types: ['card'],
-        save_default_payment_method: 'on_subscription',
-      },
+        save_default_payment_method: 'on_subscription'
+      }
     });
 
-    console.log('✅ Subscription created for customer:', customer.id);
+    console.log('✅ Subscription created for:', customer.id);
 
-       // TwiML continues the Studio flow
-       res.set('Content-Type', 'text/xml');
-       res.send(`
-         <Response>
-           <Say>Thank you! Your payment was processed successfully.</Say>
-           <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/{${process.env.TWILIO_ACCOUNT_SID}}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return</Redirect>
-         </Response>
-       `);
-   
-     } catch (err) {
-       console.error('Payment processing error:', err);
-       res.set('Content-Type', 'text/xml');
-       res.send(`
-         <Response>
-           <Say>We encountered an error processing your payment. Please try again later.</Say>
-           <Hangup/>
-         </Response>
-       `);
-     }
+    // TwiML response
+    res.type('text/xml').send(`
+      <Response>
+        <Say>Thank you! Your payment was processed successfully.</Say>
+        <Redirect method="POST">https://webhooks.twilio.com/v1/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Flows/${process.env.STUDIO_FLOW_SID}?FlowEvent=return</Redirect>
+      </Response>
+    `);
+
+  } catch (err) {
+    console.error('❌ Payment processing failed:', err);
+    res.type('text/xml').send(`
+      <Response>
+        <Say>Error: ${err.message.replace(/[^\w\s]/gi, '')}</Say>
+        <Hangup/>
+      </Response>
+    `);
+  }
 });
 
 
